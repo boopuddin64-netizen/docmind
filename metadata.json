@@ -1,0 +1,6 @@
+{
+  "name": "DocuMind",
+  "description": "Smart AI document scanner and intelligent life reminder manager for bills, contracts, vehicle maintenance, medical, work & daily deadlines",
+  "requestFramePermissions": ["camera"],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
