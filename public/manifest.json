@@ -1,0 +1,39 @@
+{
+  "name": "DocuMind - Smart AI Scanner & Reminder",
+  "short_name": "DocuMind",
+  "description": "Smart AI document scanner and intelligent reminder manager for bills, contracts, vehicle maintenance, medical, work & daily deadlines.",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "orientation": "portrait-primary",
+  "background_color": "#07131e",
+  "theme_color": "#07131e",
+  "id": "/",
+  "icons": [
+    {
+      "src": "/apple-touch-icon.png",
+      "sizes": "180x180",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "/icon-192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "/icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "/icon-maskable-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "maskable"
+    }
+  ],
+  "categories": ["utilities", "productivity", "medical"]
+}

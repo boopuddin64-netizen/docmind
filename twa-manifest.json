@@ -1,0 +1,35 @@
+{
+  "packageId": "app.docmind.pwa",
+  "host": "ais-pre-t77j6qf3w5b7n62rgujiah-110028292431.europe-west1.run.app",
+  "name": "DocuMind - Smart AI Scanner & Reminder",
+  "launcherName": "DocuMind",
+  "display": "standalone",
+  "themeColor": "#00382E",
+  "navigationColor": "#00382E",
+  "navigationColorDark": "#00382E",
+  "navigationDividerColor": "#00382E",
+  "navigationDividerColorDark": "#00382E",
+  "backgroundColor": "#00382E",
+  "enableNotifications": true,
+  "startUrl": "/",
+  "iconUrl": "https://ais-pre-t77j6qf3w5b7n62rgujiah-110028292431.europe-west1.run.app/icon-512.png",
+  "maskableIconUrl": "https://ais-pre-t77j6qf3w5b7n62rgujiah-110028292431.europe-west1.run.app/icon-maskable-512.png",
+  "appVersionName": "1.0.0",
+  "appVersionCode": 1,
+  "signingKey": {
+    "path": "./android.keystore",
+    "alias": "android"
+  },
+  "splashScreenFadeOutDuration": 300,
+  "generatorApp": "bubblewrap-cli",
+  "webManifestUrl": "https://ais-pre-t77j6qf3w5b7n62rgujiah-110028292431.europe-west1.run.app/manifest.json",
+  "fallbackType": "customtabs",
+  "features": {},
+  "alphaDependencies": {
+    "enabled": false
+  },
+  "enableSiteSettingsShortcut": "true",
+  "isChromeOSOnly": false,
+  "isLlamaPack": false,
+  "pwaUrl": "https://ais-pre-t77j6qf3w5b7n62rgujiah-110028292431.europe-west1.run.app/"
+}

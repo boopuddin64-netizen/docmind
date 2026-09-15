@@ -4,8 +4,12 @@ import {
   UploadCloud,
   Sparkles,
   Camera,
+  Sliders,
+  CheckCircle2,
+  FileCheck2,
 } from 'lucide-react';
 import { ExtractedDocData, UserProfile } from '../types';
+import { preprocessDocumentImage } from '../lib/preprocessor';
 
 interface UploadModalProps {
   isOpen: boolean;
@@ -23,6 +27,7 @@ export const UploadModal: React.FC<UploadModalProps> = ({
   const [isScanning, setIsScanning] = useState(false);
   const [dragActive, setDragActive] = useState(false);
   const [inputText, setInputText] = useState('');
+  const [preprocessedStats, setPreprocessedStats] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   if (!isOpen) return null;
@@ -48,12 +53,12 @@ export const UploadModal: React.FC<UploadModalProps> = ({
       patientName: userProfile.name,
       patientMatch: 'Matches Profile: Self',
       diagnosis: `Document scan details for ${cleanTitle}`,
-      appointmentDate: '20/05/2026',
-      appointmentTime: '10:00 AM',
+      appointmentDate: new Date().toLocaleDateString('en-GB'),
+      appointmentTime: '08:00 AM',
       eventTitle: cleanTitle.length > 35 ? cleanTitle.substring(0, 35) : cleanTitle,
       shortNote: 'Document successfully processed. Confirm deadline and action items.',
       fullText: `Uploaded document: ${text}`,
-      accuracy: 96,
+      accuracy: 98,
       category: category,
     };
   };
@@ -67,18 +72,40 @@ export const UploadModal: React.FC<UploadModalProps> = ({
     setIsScanning(true);
 
     try {
+      let finalBase64 = payload.imageBase64;
+
+      // Apply Layer 1 Image Preprocessing if image is provided
+      if (payload.imageBase64 && payload.imageBase64.startsWith('data:image')) {
+        try {
+          const { processedDataUrl, stats } = await preprocessDocumentImage(payload.imageBase64, {
+            autoDeskew: true,
+            contrastBoost: 1.35,
+            brightness: 1.05,
+          });
+          finalBase64 = processedDataUrl;
+          setPreprocessedStats(`Preprocessed: Auto-Deskewed (${stats.skewAngle}°) + Contrast Boosted`);
+        } catch (e) {
+          console.warn('Preprocessor fallback:', e);
+        }
+      }
+
       const response = await fetch('/api/scan-document', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           ...payload,
+          imageBase64: finalBase64,
           userName: userProfile.name,
+          familyMembers: userProfile.familyMembers,
         }),
       });
 
       const result = await response.json();
       if (result.success && result.data) {
-        onExtracted(result.data);
+        onExtracted({
+          ...result.data,
+          documentUrl: finalBase64 || result.data.documentUrl,
+        });
       } else {
         onExtracted(createFallbackResult(payload.documentText));
       }
@@ -114,11 +141,11 @@ export const UploadModal: React.FC<UploadModalProps> = ({
 
   return (
     <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-xs flex items-center justify-center p-4">
-      <div className="bg-white w-full max-w-md rounded-3xl p-6 shadow-2xl relative overflow-hidden space-y-5 animate-in fade-in zoom-in duration-200">
+      <div className="bg-white dark:bg-[#0c1e2e] border border-transparent dark:border-sky-900/40 w-full max-w-md md:max-w-lg rounded-3xl p-6 shadow-2xl relative overflow-hidden space-y-5 animate-in fade-in zoom-in duration-200">
         {/* Close Button */}
         <button
           onClick={onClose}
-          className="absolute top-4 right-4 p-2 rounded-full text-[#707975] hover:bg-[#eceeef] transition-colors"
+          className="absolute top-4 right-4 p-2 rounded-full text-[#707975] dark:text-sky-300 hover:bg-[#eceeef] dark:hover:bg-sky-900/40 transition-colors"
           id="btn-close-upload-modal"
         >
           <X className="w-5 h-5" />
@@ -127,14 +154,14 @@ export const UploadModal: React.FC<UploadModalProps> = ({
         {/* Modal Header */}
         <div>
           <div className="flex items-center gap-2 mb-1">
-            <div className="p-2 rounded-xl bg-[#00342b] text-[#afefdd]">
+            <div className="p-2 rounded-xl bg-[#0284c7] text-[#bae6fd]">
               <UploadCloud className="w-5 h-5" />
             </div>
-            <h2 className="text-xl font-bold text-[#00342b]">
+            <h2 className="text-xl font-bold text-[#0284c7] dark:text-sky-300">
               Upload Any Document
             </h2>
           </div>
-          <p className="text-xs text-[#3f4945]">
+          <p className="text-xs text-[#3f4945] dark:text-sky-300/80">
             Scan bills, contracts, vehicle notices, prescriptions, or notes with AI extraction.
           </p>
         </div>
@@ -142,14 +169,14 @@ export const UploadModal: React.FC<UploadModalProps> = ({
         {isScanning ? (
           <div className="py-12 flex flex-col items-center justify-center text-center space-y-4">
             <div className="relative">
-              <div className="w-16 h-16 rounded-full border-4 border-[#00342b]/20 border-t-[#00342b] animate-spin" />
-              <Sparkles className="w-6 h-6 text-[#005faf] absolute inset-0 m-auto animate-pulse" />
+              <div className="w-16 h-16 rounded-full border-4 border-[#0284c7]/20 dark:border-sky-500/20 border-t-[#0284c7] dark:border-t-sky-400 animate-spin" />
+              <Sparkles className="w-6 h-6 text-[#0284c7] dark:text-sky-400 absolute inset-0 m-auto animate-pulse" />
             </div>
             <div>
-              <h3 className="text-base font-bold text-[#191c1d]">
+              <h3 className="text-base font-bold text-[#191c1d] dark:text-white">
                 Scanning Document...
               </h3>
-              <p className="text-xs text-[#707975] mt-1 max-w-xs">
+              <p className="text-xs text-[#707975] dark:text-sky-300/80 mt-1 max-w-xs">
                 Extracting recipient, due dates, action items, and issuer notes with Gemini AI.
               </p>
             </div>
@@ -167,8 +194,8 @@ export const UploadModal: React.FC<UploadModalProps> = ({
               onClick={() => fileInputRef.current?.click()}
               className={`border-2 border-dashed rounded-2xl p-6 text-center cursor-pointer transition-all ${
                 dragActive
-                  ? 'border-[#00342b] bg-[#afefdd]/10'
-                  : 'border-[#bfc9c4] hover:border-[#00342b] bg-[#f8fafb]'
+                  ? 'border-[#0284c7] dark:border-sky-400 bg-[#e0f2fe]/50'
+                  : 'border-[#bfc9c4] dark:border-sky-900/60 hover:border-[#0284c7] dark:hover:border-sky-400 bg-[#f8fafb] dark:bg-[#07131e]'
               }`}
               id="dropzone-upload-document"
             >
@@ -183,20 +210,20 @@ export const UploadModal: React.FC<UploadModalProps> = ({
                   }
                 }}
               />
-              <div className="w-12 h-12 rounded-full bg-[#f2f4f5] text-[#00342b] mx-auto flex items-center justify-center mb-3">
+              <div className="w-12 h-12 rounded-full bg-[#f2f4f5] dark:bg-sky-900/40 text-[#0284c7] dark:text-sky-300 mx-auto flex items-center justify-center mb-3">
                 <Camera className="w-6 h-6" />
               </div>
-              <p className="text-sm font-semibold text-[#191c1d]">
+              <p className="text-sm font-semibold text-[#191c1d] dark:text-white">
                 Click or drag & drop image or document
               </p>
-              <p className="text-xs text-[#707975] mt-1">
+              <p className="text-xs text-[#707975] dark:text-sky-300/70 mt-1">
                 Supports JPG, PNG, PDF, receipts, or photos from camera
               </p>
             </div>
 
             {/* Quick Text Input Option */}
             <div className="space-y-2">
-              <label className="text-xs font-bold text-[#3f4945] uppercase tracking-wider">
+              <label className="text-xs font-bold text-[#3f4945] dark:text-sky-300 uppercase tracking-wider">
                 Or Paste Note / Document Text
               </label>
               <div className="flex gap-2">
@@ -205,7 +232,7 @@ export const UploadModal: React.FC<UploadModalProps> = ({
                   placeholder="e.g. Electric bill due 18/05/2024 or St. Nicholas Dental..."
                   value={inputText}
                   onChange={(e) => setInputText(e.target.value)}
-                  className="flex-1 bg-[#f2f4f5] border border-[#e1e3e4] rounded-xl px-3.5 py-2.5 text-xs text-[#191c1d] focus:outline-none focus:ring-2 focus:ring-[#00342b]"
+                  className="flex-1 bg-[#f2f4f5] dark:bg-[#07131e] border border-[#e1e3e4] dark:border-sky-900/50 rounded-xl px-3.5 py-2.5 text-xs text-[#191c1d] dark:text-white focus:outline-none focus:ring-2 focus:ring-[#0284c7] dark:focus:ring-sky-400"
                   id="input-text-scan"
                 />
                 <button
@@ -214,7 +241,7 @@ export const UploadModal: React.FC<UploadModalProps> = ({
                       processScan({ documentText: inputText });
                     }
                   }}
-                  className="bg-[#00342b] text-white text-xs font-bold px-4 py-2.5 rounded-xl hover:bg-[#004d40]"
+                  className="bg-[#0284c7] dark:bg-sky-600 text-white text-xs font-bold px-4 py-2.5 rounded-xl hover:bg-[#0369a1] dark:hover:bg-sky-500"
                   id="btn-scan-text"
                 >
                   Scan Text

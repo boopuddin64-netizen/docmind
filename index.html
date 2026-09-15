@@ -2,12 +2,86 @@
 <html lang="en">
   <head>
     <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>My Google AI Studio App</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover" />
+    <title>DocuMind - Smart AI Scanner & Life Reminder Manager</title>
+    
+    <!-- PWA & Mobile Home Screen Bookmark Icon -->
+    <link rel="manifest" href="/manifest.json" />
+    <link rel="icon" type="image/png" sizes="192x192" href="/icon-192.png" />
+    <link rel="icon" type="image/png" sizes="64x64" href="/favicon.png" />
+    <link rel="shortcut icon" type="image/png" href="/favicon.png" />
+    <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
+    <link rel="apple-touch-icon" sizes="180x180" href="/apple-touch-icon.png" />
+    <link rel="apple-touch-icon-precomposed" href="/apple-touch-icon-precomposed.png" />
+    <meta name="theme-color" content="#07131e" />
+    <meta name="mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+    <meta name="apple-mobile-web-app-title" content="DocuMind" />
+    <meta name="application-name" content="DocuMind" />
+    <meta name="description" content="DocuMind is an intelligent document scanner and life reminder manager for bills, contracts, vehicle maintenance, medical appointments, work & daily deadlines." />
+    <meta property="og:image" content="/icon-512.png" />
+    
+    <style>
+      /* Prevent initial pitch-black or blank white screen flash on app launch */
+      html, body {
+        background-color: #07131e;
+        color: #ffffff;
+        margin: 0;
+        padding: 0;
+        font-family: system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
+      }
+      #root:empty {
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        height: 100vh;
+        width: 100vw;
+        background-color: #07131e;
+      }
+      #root:empty::before {
+        content: '';
+        width: 80px;
+        height: 80px;
+        background-image: url('/docmind_logo.jpg');
+        background-size: cover;
+        background-position: center;
+        border-radius: 20px;
+        box-shadow: 0 0 25px rgba(2, 132, 199, 0.5);
+        margin-bottom: 16px;
+        animation: pulseLogo 1.5s infinite ease-in-out;
+      }
+      #root:empty::after {
+        content: 'Loading DocuMind AI...';
+        font-size: 13px;
+        font-weight: 700;
+        color: #38bdf8;
+        letter-spacing: 0.05em;
+      }
+      @keyframes pulseLogo {
+        0%, 100% { transform: scale(0.96); opacity: 0.8; }
+        50% { transform: scale(1.04); opacity: 1; }
+      }
+    </style>
   </head>
   <body>
     <div id="root"></div>
     <script type="module" src="/src/main.tsx"></script>
+    <script>
+      if ('serviceWorker' in navigator) {
+        window.addEventListener('load', () => {
+          navigator.serviceWorker.register('/sw.js').then(
+            (reg) => {
+              console.log('DocuMind ServiceWorker registered successfully:', reg.scope);
+            },
+            (err) => {
+              console.log('DocuMind ServiceWorker registration failed:', err);
+            }
+          );
+        });
+      }
+    </script>
   </body>
 </html>
 

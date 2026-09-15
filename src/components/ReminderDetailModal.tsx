@@ -16,6 +16,7 @@ import {
   Save,
 } from 'lucide-react';
 import { Reminder, ReminderCategory } from '../types';
+import { downloadIcsCalendar } from '../lib/icalHelper';
 
 interface ReminderDetailModalProps {
   reminder: Reminder | null;
@@ -66,6 +67,9 @@ export const ReminderDetailModal: React.FC<ReminderDetailModalProps> = ({
       eventTitle,
       category,
       patientName,
+      patientMatch: (/promise/i.test(patientName) || patientName.toLowerCase() === 'self')
+        ? 'Matches Profile: Self'
+        : 'Matches Profile: Household',
       hospitalName,
       appointmentDate,
       appointmentTime,
@@ -77,25 +81,8 @@ export const ReminderDetailModal: React.FC<ReminderDetailModalProps> = ({
   };
 
   const exportCalendar = () => {
-    const icsData = `BEGIN:VCALENDAR
-VERSION:2.0
-PRODID:-//DocReminder App//EN
-BEGIN:VEVENT
-SUMMARY:${reminder.eventTitle}
-DESCRIPTION:${reminder.shortNote} - Hospital: ${reminder.hospitalName}
-LOCATION:${reminder.hospitalName}
-STATUS:CONFIRMED
-END:VEVENT
-END:VCALENDAR`;
-
-    const blob = new Blob([icsData], { type: 'text/calendar;charset=utf-8;' });
-    const url = URL.createObjectURL(blob);
-    const link = document.createElement('a');
-    link.href = url;
-    link.setAttribute('download', `${reminder.eventTitle.replace(/\s+/g, '_')}.ics`);
-    document.body.appendChild(link);
-    link.click();
-    document.body.removeChild(link);
+    if (!reminder) return;
+    downloadIcsCalendar(reminder);
   };
 
   return (
@@ -113,7 +100,7 @@ END:VCALENDAR`;
         {/* Close & Edit Header Buttons */}
         <div className="flex items-center justify-between border-b border-[#e1e3e4] pb-3">
           <div className="flex items-center gap-2">
-            <span className="text-xs font-bold uppercase tracking-wider px-3 py-1 rounded-full bg-[#00342b] text-white">
+            <span className="text-xs font-bold uppercase tracking-wider px-3 py-1 rounded-full bg-[#0284c7] text-white">
               {category}
             </span>
             <span className="text-xs font-bold text-[#005faf] bg-[#d4e3ff] px-2.5 py-1 rounded-full flex items-center gap-1">
@@ -145,7 +132,7 @@ END:VCALENDAR`;
         {/* Edit Form OR View Mode */}
         {isEditing ? (
           <div className="space-y-3 pt-1">
-            <h3 className="text-sm font-bold text-[#00342b] uppercase tracking-wider">
+            <h3 className="text-sm font-bold text-[#0284c7] uppercase tracking-wider">
               Edit Reminder Details
             </h3>
 
@@ -155,7 +142,7 @@ END:VCALENDAR`;
                 type="text"
                 value={eventTitle}
                 onChange={(e) => setEventTitle(e.target.value)}
-                className="w-full bg-[#f2f4f5] border border-[#e1e3e4] rounded-xl px-3 py-2 text-xs font-bold text-[#191c1d] focus:bg-white focus:outline-none focus:ring-2 focus:ring-[#00342b] mt-0.5"
+                className="w-full bg-[#f2f4f5] border border-[#e1e3e4] rounded-xl px-3 py-2 text-xs font-bold text-[#191c1d] focus:bg-white focus:outline-none focus:ring-2 focus:ring-[#0284c7] mt-0.5"
               />
             </div>
 
@@ -165,7 +152,7 @@ END:VCALENDAR`;
                 <select
                   value={category}
                   onChange={(e) => setCategory(e.target.value as ReminderCategory)}
-                  className="w-full bg-[#f2f4f5] border border-[#e1e3e4] rounded-xl px-2.5 py-2 text-xs font-bold text-[#191c1d] focus:bg-white focus:outline-none focus:ring-2 focus:ring-[#00342b] mt-0.5"
+                  className="w-full bg-[#f2f4f5] border border-[#e1e3e4] rounded-xl px-2.5 py-2 text-xs font-bold text-[#191c1d] focus:bg-white focus:outline-none focus:ring-2 focus:ring-[#0284c7] mt-0.5"
                 >
                   <option value="Medical">Medical</option>
                   <option value="Bills & Invoices">Bills & Invoices</option>
@@ -185,7 +172,7 @@ END:VCALENDAR`;
                   type="text"
                   value={patientName}
                   onChange={(e) => setPatientName(e.target.value)}
-                  className="w-full bg-[#f2f4f5] border border-[#e1e3e4] rounded-xl px-3 py-2 text-xs font-semibold text-[#191c1d] focus:bg-white focus:outline-none focus:ring-2 focus:ring-[#00342b] mt-0.5"
+                  className="w-full bg-[#f2f4f5] border border-[#e1e3e4] rounded-xl px-3 py-2 text-xs font-semibold text-[#191c1d] focus:bg-white focus:outline-none focus:ring-2 focus:ring-[#0284c7] mt-0.5"
                 />
               </div>
             </div>
@@ -196,7 +183,7 @@ END:VCALENDAR`;
                 type="text"
                 value={hospitalName}
                 onChange={(e) => setHospitalName(e.target.value)}
-                className="w-full bg-[#f2f4f5] border border-[#e1e3e4] rounded-xl px-3 py-2 text-xs font-semibold text-[#191c1d] focus:bg-white focus:outline-none focus:ring-2 focus:ring-[#00342b] mt-0.5"
+                className="w-full bg-[#f2f4f5] border border-[#e1e3e4] rounded-xl px-3 py-2 text-xs font-semibold text-[#191c1d] focus:bg-white focus:outline-none focus:ring-2 focus:ring-[#0284c7] mt-0.5"
               />
             </div>
 
@@ -207,7 +194,7 @@ END:VCALENDAR`;
                   type="text"
                   value={appointmentDate}
                   onChange={(e) => setAppointmentDate(e.target.value)}
-                  className="w-full bg-[#f2f4f5] border border-[#e1e3e4] rounded-xl px-3 py-2 text-xs font-semibold text-[#191c1d] focus:bg-white focus:outline-none focus:ring-2 focus:ring-[#00342b] mt-0.5"
+                  className="w-full bg-[#f2f4f5] border border-[#e1e3e4] rounded-xl px-3 py-2 text-xs font-semibold text-[#191c1d] focus:bg-white focus:outline-none focus:ring-2 focus:ring-[#0284c7] mt-0.5"
                 />
               </div>
 
@@ -217,7 +204,7 @@ END:VCALENDAR`;
                   type="text"
                   value={appointmentTime}
                   onChange={(e) => setAppointmentTime(e.target.value)}
-                  className="w-full bg-[#f2f4f5] border border-[#e1e3e4] rounded-xl px-3 py-2 text-xs font-semibold text-[#191c1d] focus:bg-white focus:outline-none focus:ring-2 focus:ring-[#00342b] mt-0.5"
+                  className="w-full bg-[#f2f4f5] border border-[#e1e3e4] rounded-xl px-3 py-2 text-xs font-semibold text-[#191c1d] focus:bg-white focus:outline-none focus:ring-2 focus:ring-[#0284c7] mt-0.5"
                 />
               </div>
             </div>
@@ -228,7 +215,7 @@ END:VCALENDAR`;
                 type="text"
                 value={diagnosis}
                 onChange={(e) => setDiagnosis(e.target.value)}
-                className="w-full bg-[#f2f4f5] border border-[#e1e3e4] rounded-xl px-3 py-2 text-xs font-semibold text-[#191c1d] focus:bg-white focus:outline-none focus:ring-2 focus:ring-[#00342b] mt-0.5"
+                className="w-full bg-[#f2f4f5] border border-[#e1e3e4] rounded-xl px-3 py-2 text-xs font-semibold text-[#191c1d] focus:bg-white focus:outline-none focus:ring-2 focus:ring-[#0284c7] mt-0.5"
               />
             </div>
 
@@ -238,13 +225,13 @@ END:VCALENDAR`;
                 rows={2}
                 value={shortNote}
                 onChange={(e) => setShortNote(e.target.value)}
-                className="w-full bg-[#f2f4f5] border border-[#e1e3e4] rounded-xl p-3 text-xs font-normal text-[#191c1d] focus:bg-white focus:outline-none focus:ring-2 focus:ring-[#00342b] mt-0.5 resize-none"
+                className="w-full bg-[#f2f4f5] border border-[#e1e3e4] rounded-xl p-3 text-xs font-normal text-[#191c1d] focus:bg-white focus:outline-none focus:ring-2 focus:ring-[#0284c7] mt-0.5 resize-none"
               />
             </div>
 
             <button
               onClick={handleSave}
-              className="w-full py-3 bg-[#00342b] hover:bg-[#004d40] text-white font-bold text-xs rounded-full flex items-center justify-center gap-2 shadow-sm transition-colors mt-2"
+              className="w-full py-3 bg-[#0284c7] hover:bg-[#0369a1] text-white font-bold text-xs rounded-full flex items-center justify-center gap-2 shadow-sm transition-colors mt-2"
               id="btn-save-reminder-edits"
             >
               <Save className="w-4 h-4" />
@@ -268,7 +255,7 @@ END:VCALENDAR`;
             <div className="bg-[#f8fafb] rounded-2xl p-4 border border-[#e1e3e4] space-y-3">
               <div className="flex items-center justify-between text-xs pb-2 border-b border-[#e1e3e4]">
                 <span className="text-[#707975] flex items-center gap-1.5">
-                  <User className="w-4 h-4 text-[#00342b]" /> Recipient:
+                  <User className="w-4 h-4 text-[#0284c7]" /> Recipient:
                 </span>
                 <span className="font-bold text-[#191c1d]">
                   {reminder.patientName}
@@ -286,7 +273,7 @@ END:VCALENDAR`;
 
               <div className="text-xs space-y-1">
                 <span className="text-[#707975] flex items-center gap-1.5 font-medium">
-                  <FileText className="w-4 h-4 text-[#00342b]" /> Subject / Purpose:
+                  <FileText className="w-4 h-4 text-[#0284c7]" /> Subject / Purpose:
                 </span>
                 <p className="font-semibold text-[#191c1d] pl-5">
                   {reminder.diagnosis}
@@ -314,7 +301,7 @@ END:VCALENDAR`;
                   </label>
                   <span className="text-[10px] text-[#707975]">Verified</span>
                 </div>
-                <pre className="bg-[#191c1d] text-[#afefdd] p-3.5 rounded-xl text-[11px] font-mono leading-relaxed whitespace-pre-wrap max-h-36 overflow-y-auto">
+                <pre className="bg-[#0f172a] text-[#bae6fd] p-3.5 rounded-xl text-[11px] font-mono leading-relaxed whitespace-pre-wrap max-h-36 overflow-y-auto">
                   {reminder.fullText}
                 </pre>
               </div>
@@ -332,7 +319,7 @@ END:VCALENDAR`;
             className={`w-full py-3 rounded-full font-bold text-xs flex items-center justify-center gap-2 shadow-xs transition-colors ${
               reminder.isCompleted
                 ? 'bg-[#f2f4f5] text-[#3f4945] hover:bg-[#e1e3e4]'
-                : 'bg-[#00342b] text-white hover:bg-[#004d40]'
+                : 'bg-[#0284c7] text-white hover:bg-[#0369a1]'
             }`}
             id="btn-modal-toggle-complete"
           >

@@ -1,0 +1,12 @@
+[
+  {
+    "relation": ["delegate_permission/common.handle_all_urls"],
+    "target": {
+      "namespace": "android_app",
+      "package_name": "app.docmind.pwa",
+      "sha256_cert_fingerprints": [
+        "FA:2A:83:8B:1E:DF:0B:45:AC:01:A2:18:7E:2F:1B:44:81:4A:20:98:86:13:08:92:49:FE:E0:40:99:98:02:16"
+      ]
+    }
+  }
+]

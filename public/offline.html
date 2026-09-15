@@ -1,0 +1,67 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>DocuMind - Offline</title>
+    <style>
+      body {
+        margin: 0;
+        padding: 0;
+        background-color: #00382e;
+        color: #ffffff;
+        font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        min-height: 100vh;
+        text-align: center;
+        box-sizing: border-box;
+        padding: 24px;
+      }
+      .card {
+        background: rgba(255, 255, 255, 0.08);
+        border: 1px solid rgba(255, 255, 255, 0.15);
+        border-radius: 24px;
+        padding: 32px 24px;
+        max-width: 400px;
+        width: 100%;
+        box-shadow: 0 20px 40px rgba(0,0,0,0.3);
+      }
+      h1 {
+        font-size: 24px;
+        margin-bottom: 12px;
+        font-weight: 700;
+      }
+      p {
+        font-size: 14px;
+        color: #a3e635;
+        line-height: 1.5;
+        margin-bottom: 24px;
+      }
+      button {
+        background: #10c047;
+        color: #ffffff;
+        border: none;
+        padding: 12px 24px;
+        font-size: 14px;
+        font-weight: 600;
+        border-radius: 12px;
+        cursor: pointer;
+        transition: transform 0.2s, background 0.2s;
+      }
+      button:active {
+        transform: scale(0.97);
+        background: #0ea23b;
+      }
+    </style>
+  </head>
+  <body>
+    <div class="card">
+      <h1>DocuMind Offline</h1>
+      <p>You are currently offline. Check your internet connection or reload when connection is restored.</p>
+      <button onclick="window.location.reload()">Retry Connection</button>
+    </div>
+  </body>
+</html>

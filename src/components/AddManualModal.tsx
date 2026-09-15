@@ -19,8 +19,8 @@ export const AddManualModal: React.FC<AddManualModalProps> = ({
   const [hospitalName, setHospitalName] = useState('St. Nicholas Hospital');
   const [patientName, setPatientName] = useState(userProfile.name);
   const [diagnosis, setDiagnosis] = useState('');
-  const [appointmentDate, setAppointmentDate] = useState('15/05/2024');
-  const [appointmentTime, setAppointmentTime] = useState('10:00 AM');
+  const [appointmentDate, setAppointmentDate] = useState(new Date().toLocaleDateString('en-GB'));
+  const [appointmentTime, setAppointmentTime] = useState('08:00 AM');
   const [shortNote, setShortNote] = useState('');
   const [category, setCategory] = useState<ReminderCategory>('Checkup');
 
@@ -35,9 +35,9 @@ export const AddManualModal: React.FC<AddManualModalProps> = ({
       eventTitle,
       hospitalName,
       patientName,
-      patientMatch: patientName.toLowerCase().includes('chidi')
+      patientMatch: (/promise/i.test(patientName) || patientName.toLowerCase() === 'self')
         ? 'Matches Profile: Self'
-        : 'Matches Profile: Family',
+        : 'Matches Profile: Household',
       diagnosis: diagnosis || 'Routine Medical Checkup',
       appointmentDate,
       appointmentTime,
@@ -65,10 +65,10 @@ export const AddManualModal: React.FC<AddManualModalProps> = ({
 
         <div>
           <div className="flex items-center gap-2 mb-1">
-            <div className="p-2 rounded-xl bg-[#00342b] text-[#94d3c1]">
+            <div className="p-2 rounded-xl bg-[#0284c7] text-white">
               <Plus className="w-5 h-5" />
             </div>
-            <h2 className="text-xl font-bold text-[#00342b]">
+            <h2 className="text-xl font-bold text-[#0284c7]">
               Add New Reminder
             </h2>
           </div>
@@ -88,7 +88,7 @@ export const AddManualModal: React.FC<AddManualModalProps> = ({
               placeholder="e.g. Pay Electricity Bill or Dental Review"
               value={eventTitle}
               onChange={(e) => setEventTitle(e.target.value)}
-              className="w-full bg-[#f2f4f5] border border-[#e1e3e4] rounded-xl px-3.5 py-2.5 text-xs text-[#191c1d] focus:outline-none focus:ring-2 focus:ring-[#00342b] mt-1"
+              className="w-full bg-[#f2f4f5] border border-[#e1e3e4] rounded-xl px-3.5 py-2.5 text-xs text-[#191c1d] focus:outline-none focus:ring-2 focus:ring-[#0284c7] mt-1"
               id="input-manual-title"
             />
           </div>
@@ -101,7 +101,7 @@ export const AddManualModal: React.FC<AddManualModalProps> = ({
               <select
                 value={category}
                 onChange={(e) => setCategory(e.target.value as ReminderCategory)}
-                className="w-full bg-[#f2f4f5] border border-[#e1e3e4] rounded-xl px-3 py-2.5 text-xs text-[#191c1d] font-semibold focus:outline-none focus:ring-2 focus:ring-[#00342b] mt-1"
+                className="w-full bg-[#f2f4f5] border border-[#e1e3e4] rounded-xl px-3 py-2.5 text-xs text-[#191c1d] font-semibold focus:outline-none focus:ring-2 focus:ring-[#0284c7] mt-1"
                 id="select-manual-category"
               >
                 <option value="Medical">Medical</option>
@@ -123,7 +123,7 @@ export const AddManualModal: React.FC<AddManualModalProps> = ({
               <select
                 value={patientName}
                 onChange={(e) => setPatientName(e.target.value)}
-                className="w-full bg-[#f2f4f5] border border-[#e1e3e4] rounded-xl px-3 py-2.5 text-xs text-[#191c1d] font-semibold focus:outline-none focus:ring-2 focus:ring-[#00342b] mt-1"
+                className="w-full bg-[#f2f4f5] border border-[#e1e3e4] rounded-xl px-3 py-2.5 text-xs text-[#191c1d] font-semibold focus:outline-none focus:ring-2 focus:ring-[#0284c7] mt-1"
                 id="select-manual-patient"
               >
                 {userProfile.familyMembers.map((fam) => (
@@ -144,7 +144,7 @@ export const AddManualModal: React.FC<AddManualModalProps> = ({
               placeholder="e.g. Eko Electricity or St. Nicholas Hospital"
               value={hospitalName}
               onChange={(e) => setHospitalName(e.target.value)}
-              className="w-full bg-[#f2f4f5] border border-[#e1e3e4] rounded-xl px-3.5 py-2.5 text-xs text-[#191c1d] focus:outline-none focus:ring-2 focus:ring-[#00342b] mt-1"
+              className="w-full bg-[#f2f4f5] border border-[#e1e3e4] rounded-xl px-3.5 py-2.5 text-xs text-[#191c1d] focus:outline-none focus:ring-2 focus:ring-[#0284c7] mt-1"
               id="input-manual-hospital"
             />
           </div>
@@ -159,7 +159,7 @@ export const AddManualModal: React.FC<AddManualModalProps> = ({
                 placeholder="15/05/2024"
                 value={appointmentDate}
                 onChange={(e) => setAppointmentDate(e.target.value)}
-                className="w-full bg-[#f2f4f5] border border-[#e1e3e4] rounded-xl px-3.5 py-2.5 text-xs text-[#191c1d] focus:outline-none focus:ring-2 focus:ring-[#00342b] mt-1"
+                className="w-full bg-[#f2f4f5] border border-[#e1e3e4] rounded-xl px-3.5 py-2.5 text-xs text-[#191c1d] focus:outline-none focus:ring-2 focus:ring-[#0284c7] mt-1"
                 id="input-manual-date"
               />
             </div>
@@ -173,7 +173,7 @@ export const AddManualModal: React.FC<AddManualModalProps> = ({
                 placeholder="10:00 AM"
                 value={appointmentTime}
                 onChange={(e) => setAppointmentTime(e.target.value)}
-                className="w-full bg-[#f2f4f5] border border-[#e1e3e4] rounded-xl px-3.5 py-2.5 text-xs text-[#191c1d] focus:outline-none focus:ring-2 focus:ring-[#00342b] mt-1"
+                className="w-full bg-[#f2f4f5] border border-[#e1e3e4] rounded-xl px-3.5 py-2.5 text-xs text-[#191c1d] focus:outline-none focus:ring-2 focus:ring-[#0284c7] mt-1"
                 id="input-manual-time"
               />
             </div>
@@ -188,14 +188,14 @@ export const AddManualModal: React.FC<AddManualModalProps> = ({
               placeholder="e.g. Fast 8 hours before lab draw or bring previous X-rays"
               value={shortNote}
               onChange={(e) => setShortNote(e.target.value)}
-              className="w-full bg-[#f2f4f5] border border-[#e1e3e4] rounded-xl p-3 text-xs text-[#191c1d] focus:outline-none focus:ring-2 focus:ring-[#00342b] mt-1 resize-none"
+              className="w-full bg-[#f2f4f5] border border-[#e1e3e4] rounded-xl p-3 text-xs text-[#191c1d] focus:outline-none focus:ring-2 focus:ring-[#0284c7] mt-1 resize-none"
               id="textarea-manual-note"
             />
           </div>
 
           <button
             type="submit"
-            className="w-full bg-[#00342b] hover:bg-[#004d40] text-white py-3 rounded-full font-bold text-xs flex items-center justify-center gap-2 shadow-xs"
+            className="w-full bg-[#0284c7] hover:bg-[#0369a1] text-white py-3 rounded-full font-bold text-xs flex items-center justify-center gap-2 shadow-xs transition-colors"
             id="btn-submit-manual-reminder"
           >
             <Bell className="w-4 h-4" />
