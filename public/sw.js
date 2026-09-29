@@ -1,5 +1,5 @@
 /* DocuMind service worker: offline shell + Web Push notifications. */
-const CACHE_NAME = "docmind-pwa-v3";
+const CACHE_NAME = "docmind-pwa-v4";
 const ASSETS_TO_CACHE = [
   "/",
   "/index.html",
