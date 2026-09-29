@@ -78,3 +78,8 @@ test('sanitizer: household name is not marked Self for another profile owner', (
 test('dedup hash is stable', () => {
   assert.equal(generateCompositeDedupHash('A B', '01/02/2026', 'T'), generateCompositeDedupHash('a-b', '01-02-2026', 't'));
 });
+
+test('parseIcsTime shares the fixed parser (no "Program" => midnight, first time of a range)', () => {
+  assert.deepEqual(parseIcsTime('12:00 Program'), { h: 12, min: 0 });
+  assert.deepEqual(parseIcsTime('9:00 AM - 5:00 PM'), { h: 9, min: 0 });
+});

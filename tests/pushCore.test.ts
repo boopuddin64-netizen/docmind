@@ -23,10 +23,12 @@ import { MemoryStore } from '../push-server/store';
 
 const cfg = (over: Partial<PushConfig> = {}): PushConfig => ({
   publicKey: 'BPubKeyPubKeyPubKeyPubKeyPubKeyPubKey', privateKey: 'priv', subject: 'mailto:t@example.com',
-  cronSecret: 's3cret', hideTitles: false, maxLateMs: 6 * 3600_000, ...over,
+  cronSecret: 's3cret', hideTitles: false, maxLateMs: 6 * 3600_000,
+  allowedHosts: [], allowLocalTestEndpoints: false, maxSubscriptions: 1000, sendTimeoutMs: 8000, dispatchBudgetMs: 35_000,
+  dispatchConcurrency: 10, claimLeaseSeconds: 180, ...over,
 });
 const goodSub = (n = 1) => ({
-  endpoint: `https://push.example.test/send/${n}`,
+  endpoint: `https://fcm.googleapis.com/fcm/send/${n}`,
   keys: { p256dh: 'BNcRdreALRFXTkOOUHK1EtK2wtaz5Ry4YfYCA_0QTpQtUbVlUls0VJXg7A8u-Ts1XbjhazAkj7I99e8QcYP7DkM', auth: 'tBHItJI5svbpez7KI4CCXg' },
 });
 
@@ -67,15 +69,15 @@ test('loadConfig reads env; public key endpoint 503 when unconfigured', () => {
 
 test('validateSubscription: https only, key format, length', () => {
   assert.ok(validateSubscription(goodSub()));
-  assert.equal(validateSubscription({ ...goodSub(), endpoint: 'http://push.example.test/x' }), null);
+  assert.equal(validateSubscription({ ...goodSub(), endpoint: 'http://fcm.googleapis.com/x' }), null);
   assert.equal(validateSubscription({ ...goodSub(), endpoint: 'javascript:alert(1)' }), null);
-  assert.equal(validateSubscription({ ...goodSub(), endpoint: 'https://x/' + 'a'.repeat(2000) }), null);
+  assert.equal(validateSubscription({ ...goodSub(), endpoint: 'https://fcm.googleapis.com/' + 'a'.repeat(2000) }), null);
   assert.equal(validateSubscription({ endpoint: goodSub().endpoint, keys: { p256dh: '!!', auth: 'x' } }), null);
   assert.equal(validateSubscription(null), null);
 });
 
 test('validateReminders: size limit, types, dedupe by id (last wins), clamps', () => {
-  const ok = validateReminders([
+  const { reminders: ok } = validateReminders([
     { id: 'a', title: 'one', dueAt: 1000, leadMinutes: 30 },
     { id: 'a', title: 'two', dueAt: 2000 },
     { id: 'b', title: 'x'.repeat(500), dueAt: 3000, leadMinutes: 5, snoozedUntil: 9000 },
@@ -85,10 +87,10 @@ test('validateReminders: size limit, types, dedupe by id (last wins), clamps', (
   assert.equal(ok.find((r) => r.id === 'b')!.title.length, 120);
   assert.equal(ok.find((r) => r.id === 'b')!.snoozedUntil, 9000);
   assert.equal(validateReminders(Array.from({ length: 501 }, (_, i) => ({ id: `${i}`, title: 't', dueAt: 1 }))), null);
-  assert.equal(validateReminders([{ id: '', title: 't', dueAt: 1 }]), null);
-  assert.equal(validateReminders([{ id: 'a', title: 't', dueAt: 'soon' }]), null);
-  assert.equal(validateReminders([{ id: 'a', title: 't', dueAt: 1, leadMinutes: -5 }]), null);
-  assert.equal(validateReminders([{ id: 'a', title: 't', dueAt: 1, leadMinutes: 10 ** 9 }]), null);
+  // invalid ITEMS are skipped (and counted); they no longer fail the whole payload
+  for (const bad of [{ id: '', title: 't', dueAt: 1 }, { id: 'a', title: 't', dueAt: 'soon' }, { id: 'a', title: 't', dueAt: 1, leadMinutes: -5 }, { id: 'a', title: 't', dueAt: 1, leadMinutes: 10 ** 9 }, null, 'x']) {
+    assert.deepEqual(validateReminders([bad]), { reminders: [], skipped: 1 });
+  }
   assert.equal(validateReminders('nope'), null);
 });
 
@@ -203,7 +205,9 @@ test('dispatch: 410/404 prune the subscription; transient errors release the cla
   assert.equal(s1.pruned, 1); assert.equal(s1.failed, 1); assert.equal(s1.sent, 0);
   assert.equal(await deps.store.getSubscription(a.id), null);
   assert.ok(await deps.store.getSubscription(b.id));
-  setBehavior(() => undefined); // service recovers → same event is retried, exactly once
+  setBehavior(() => undefined); // service recovers → same event is retried, exactly once (after the failure backoff)
+  assert.equal((await dispatchDue(deps)).backedOff, 1, 'backoff: not retried immediately');
+  now.t += 61_000;
   const s2 = await dispatchDue(deps);
   assert.equal(s2.sent, 1);
   assert.equal((await dispatchDue(deps)).sent, 0);
@@ -229,4 +233,25 @@ test('payload privacy: PUSH_HIDE_TITLES removes the reminder title from the push
   assert.ok(!JSON.stringify(sent[0].payload).includes('Oncology'));
   const p = buildPayload({ key: 'k', id: 'r1', stage: 'due', at: 1, reminder: { id: 'r1', title: 'Secret', dueAt: 1, leadMinutes: 0 } }, 1, cfg());
   assert.equal(p.title, 'Secret'); // default keeps the title
+});
+
+test('sync-reminders: one bad reminder no longer fails the sync; valid ones are stored and skipped count reported', async () => {
+  const { deps } = setup();
+  const { id, auth } = await registered(deps);
+  const r: any = await syncReminders(deps, {
+    subscriptionId: id,
+    reminders: [
+      { id: 'good1', title: 'a', dueAt: 1000 },
+      { id: 'bad-year', title: 'b', dueAt: 4_102_444_800_001 },
+      { id: '', title: 'c', dueAt: 5 },
+      { id: 'bad-lead', title: 'd', dueAt: 5, leadMinutes: -1 },
+      null,
+      { id: 'good2', title: 'e', dueAt: 2000 },
+    ],
+  }, auth);
+  assert.equal(r.status, 200);
+  assert.deepEqual(r.body, { success: true, count: 2, skipped: 4 });
+  assert.deepEqual((await deps.store.getReminders(id))!.reminders.map((x) => x.id), ['good1', 'good2']);
+  assert.equal(((await syncReminders(deps, { subscriptionId: id, reminders: 'nope' }, auth)) as any).status, 400, 'a non-array payload is still rejected');
+  assert.equal(((await syncReminders(deps, { subscriptionId: id, reminders: Array.from({ length: 501 }, (_, i) => ({ id: `${i}`, title: 't', dueAt: 1 })) }, auth)) as any).status, 400);
 });

@@ -5,8 +5,10 @@
  *   Used for local development and tests. NOT suitable for serverless (no shared disk between invocations).
  * - UpstashStore: Upstash Redis over REST (works from Vercel serverless functions). Used in production.
  *
- * The important primitive is `claim(key)`: an atomic "set if not exists". The dispatcher only sends a
- * notification for whoever wins the claim, which is what prevents duplicates when two cron invocations overlap.
+ * The important primitive is `claim(key, leaseSeconds)`: an atomic "set if not exists" that acts as a SHORT LEASE.
+ * The dispatcher only sends a notification for whoever wins the claim (no duplicates when two cron invocations
+ * overlap). The lease becomes the permanent sent-marker (`markSent`) only after the push service accepted the
+ * message; a failed/timed-out send releases it (or it simply expires) so the alert is retried, never lost.
  */
 import { promises as fs } from 'node:fs';
 import path from 'node:path';
@@ -28,6 +30,19 @@ export interface StoredSubscription {
   userAgent?: string;
 }
 
+/** Consecutive-failure bookkeeping used for backoff and for pruning dead subscriptions. */
+export interface SubscriptionHealth {
+  /** Consecutive failed dispatch attempts (any kind). */
+  failures: number;
+  /** Consecutive failures caused by the push service rejecting us (HTTP 400/401/403). */
+  rejects: number;
+  firstFailureAt: number;
+  lastFailureAt: number;
+  /** No send is attempted before this epoch ms (exponential backoff). */
+  nextAttemptAt: number;
+  lastStatus?: number | string;
+}
+
 export interface StoredReminders {
   reminders: SyncedReminder[];
   tzOffsetMinutes: number;
@@ -45,11 +60,24 @@ export interface PushStore {
   getReminders(id: string): Promise<StoredReminders | null>;
   /** Atomically records `key` as sent. Resolves true only for the single caller that created it. */
   claim(key: string, ttlSeconds: number): Promise<boolean>;
+  /**
+   * Turns a claim (a SHORT lease held while the push is being sent) into the permanent "sent" marker.
+   * Called only after the push service accepted the message.
+   */
+  markSent(key: string, ttlSeconds: number): Promise<void>;
+  /** Delivery health of a subscription (consecutive failures / backoff). null = healthy. */
+  getHealth(id: string): Promise<SubscriptionHealth | null>;
+  /** Stores the health record; null clears it. */
+  setHealth(id: string, health: SubscriptionHealth | null): Promise<void>;
   /** Un-claims a key (used when the push send failed transiently so a later run can retry). */
   release(key: string): Promise<void>;
 }
 
+/** How long a delivered event stays marked as sent (prevents duplicates). */
 export const SENT_TTL_SECONDS = 30 * 24 * 3600;
+/** Default length of the claim lease taken before a send. Only a successful send makes it permanent. */
+export const CLAIM_LEASE_SECONDS = 180;
+export const HEALTH_TTL_SECONDS = 30 * 24 * 3600;
 
 // ───────────────────────── Memory / file store ─────────────────────────
 
@@ -57,20 +85,25 @@ interface FileShape {
   subs: Record<string, StoredSubscription>;
   reminders: Record<string, StoredReminders>;
   sent: Record<string, number>; // key -> expiry epoch ms
+  health?: Record<string, SubscriptionHealth>;
 }
 
 export class MemoryStore implements PushStore {
   private subs = new Map<string, StoredSubscription>();
   private reminders = new Map<string, StoredReminders>();
   private sent = new Map<string, number>();
-  private loaded = false;
+  private health = new Map<string, SubscriptionHealth>();
+  private loading: Promise<void> | null = null;
   private writeChain: Promise<void> = Promise.resolve();
 
   constructor(private readonly filePath?: string, private readonly clock: () => number = Date.now) {}
 
-  private async load(): Promise<void> {
-    if (this.loaded) return;
-    this.loaded = true;
+  /** The load promise is cached so concurrent first calls all wait for the SAME read (no empty-state race on cold start). */
+  private load(): Promise<void> {
+    return (this.loading ??= this.readFile());
+  }
+
+  private async readFile(): Promise<void> {
     if (!this.filePath) return;
     try {
       const raw = await fs.readFile(this.filePath, 'utf8');
@@ -78,6 +111,7 @@ export class MemoryStore implements PushStore {
       for (const [k, v] of Object.entries(data.subs || {})) this.subs.set(k, v);
       for (const [k, v] of Object.entries(data.reminders || {})) this.reminders.set(k, v);
       for (const [k, v] of Object.entries(data.sent || {})) this.sent.set(k, v);
+      for (const [k, v] of Object.entries(data.health || {})) this.health.set(k, v);
     } catch (e: any) {
       if (e?.code !== 'ENOENT') console.warn('[push-store] could not read store file, starting empty:', e?.message);
     }
@@ -94,6 +128,7 @@ export class MemoryStore implements PushStore {
         subs: Object.fromEntries(this.subs),
         reminders: Object.fromEntries(this.reminders),
         sent: Object.fromEntries(this.sent),
+        health: Object.fromEntries(this.health),
       };
       await fs.mkdir(path.dirname(file), { recursive: true });
       const tmp = `${file}.${process.pid}.${Date.now()}.tmp`;
@@ -116,6 +151,7 @@ export class MemoryStore implements PushStore {
     await this.load();
     this.subs.delete(id);
     this.reminders.delete(id);
+    this.health.delete(id);
     // sent-markers are deliberately kept (they expire via TTL) so re-subscribing never re-sends recent alerts.
     await this.persist();
   }
@@ -145,9 +181,23 @@ export class MemoryStore implements PushStore {
     await this.persist();
     return true;
   }
+  async markSent(key: string, ttlSeconds: number) {
+    await this.load();
+    this.sent.set(key, this.clock() + ttlSeconds * 1000);
+    await this.persist();
+  }
   async release(key: string) {
     await this.load();
     this.sent.delete(key);
+    await this.persist();
+  }
+  async getHealth(id: string) {
+    await this.load();
+    return this.health.get(id) ?? null;
+  }
+  async setHealth(id: string, h: SubscriptionHealth | null) {
+    await this.load();
+    if (h) this.health.set(id, h); else this.health.delete(id);
     await this.persist();
   }
 }
@@ -168,7 +218,7 @@ export class UpstashStore implements PushStore {
     return parse<StoredSubscription>(raw);
   }
   async removeSubscription(id: string) {
-    await this.redis.del(`${P}:sub:${id}`, `${P}:rem:${id}`);
+    await this.redis.del(`${P}:sub:${id}`, `${P}:rem:${id}`, `${P}:health:${id}`);
     await this.redis.srem(`${P}:subs`, id);
   }
   async listSubscriptionIds() {
@@ -195,8 +245,18 @@ export class UpstashStore implements PushStore {
     const res = await this.redis.set(`${P}:sent:${key}`, '1', { nx: true, ex: ttlSeconds });
     return res === 'OK';
   }
+  async markSent(key: string, ttlSeconds: number) {
+    await this.redis.set(`${P}:sent:${key}`, '1', { ex: ttlSeconds }); // overwrite the lease with the long-lived marker
+  }
   async release(key: string) {
     await this.redis.del(`${P}:sent:${key}`);
+  }
+  async getHealth(id: string) {
+    return parse<SubscriptionHealth>(await this.redis.get<unknown>(`${P}:health:${id}`));
+  }
+  async setHealth(id: string, h: SubscriptionHealth | null) {
+    if (h) await this.redis.set(`${P}:health:${id}`, JSON.stringify(h), { ex: HEALTH_TTL_SECONDS });
+    else await this.redis.del(`${P}:health:${id}`);
   }
 }
 

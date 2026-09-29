@@ -32,6 +32,13 @@ export interface ScheduledEvent {
   reminder: SyncedReminder;
 }
 
+/** Reminders due outside [0, MAX_DUE_AT_MS] are rejected by the push server, so the client must not send them either (single source of truth). */
+export const MAX_DUE_AT_MS = 4_102_444_800_000; // 2100-01-01T00:00:00Z
+
+export function isSyncableInstant(ms: unknown): ms is number {
+  return typeof ms === 'number' && Number.isFinite(ms) && ms >= 0 && ms <= MAX_DUE_AT_MS;
+}
+
 function realDate(y: number, m: number, d: number): boolean {
   if (!(y >= 1970 && y <= 2200) || m < 1 || m > 12 || d < 1 || d > 31) return false;
   const dt = new Date(Date.UTC(y, m - 1, d));
@@ -55,17 +62,23 @@ export function parseDateParts(input: string | undefined | null): { y: number; m
   return null;
 }
 
-/** "10:00 AM", "7:05pm", "23:59", "12:00 AM" (=00:00). Missing / unparseable => 08:00 (same default as the ICS export). */
+/**
+ * "10:00 AM", "7:05pm", "23:59", "12:00 AM" (=00:00), "9am". Missing / unparseable => 08:00 (same default as the ICS export).
+ * - am/pm only counts when it is attached to the time (optional spaces, whole word): "12:00 Program" is 12:00, not 00:00.
+ * - Ranges use the FIRST time: "9:00 AM - 5:00 PM" is 09:00.
+ * - 12 AM = 00:xx, 12 PM = 12:xx.
+ */
 export function parseTimeParts(input: string | undefined | null): { h: number; min: number } {
   const raw = (typeof input === 'string' ? input : '').trim();
-  // "10:30", "10:30 PM", also bare "9am" / "9 PM"
-  const match = raw.match(/(\d{1,2}):(\d{2})/) || raw.match(/\b(\d{1,2})()\s*(?=[ap]\.?m)/i);
-  if (match) {
-    let h = +match[1];
-    const min = match[2] ? +match[2] : 0;
+  const re = /\b(\d{1,2}):(\d{2})(?!\d)(?:\s*([ap])\.?m(?![A-Za-z]))?|\b(\d{1,2})\s*([ap])\.?m(?![A-Za-z])/i;
+  const m = re.exec(raw);
+  if (m) {
+    let h = +(m[1] ?? m[4]);
+    const min = m[2] ? +m[2] : 0;
+    const mer = (m[3] ?? m[5])?.toLowerCase();
     if (h <= 23 && min <= 59) {
-      if (/pm/i.test(raw) && h < 12) h += 12;
-      if (/am/i.test(raw) && h === 12) h = 0;
+      if (mer === 'p' && h < 12) h += 12;
+      if (mer === 'a' && h === 12) h = 0;
       return { h, min };
     }
   }
@@ -178,16 +191,17 @@ export function buildSyncPayload(
 ): SyncedReminder[] {
   const byId = new Map<string, SyncedReminder>();
   for (const r of reminders) {
-    if (!r || r.isCompleted || typeof r.id !== 'string' || !r.id) continue;
+    if (!r || r.isCompleted || typeof r.id !== 'string' || !r.id || r.id.length > 100) continue;
     const dueAt = computeDueAt(r.appointmentDate, r.appointmentTime);
-    if (dueAt === null || dueAt < now - 24 * 3_600_000) continue;
+    // Same range the server accepts (0 … MAX_DUE_AT_MS): one out-of-range item must never make the whole sync fail.
+    if (dueAt === null || !isSyncableInstant(dueAt) || dueAt < now - 24 * 3_600_000) continue;
     const sn = r.notificationSchedule?.snoozedUntil ? Date.parse(r.notificationSchedule.snoozedUntil) : NaN;
     byId.set(r.id, {
       id: r.id,
       title: String(r.eventTitle || 'Reminder').slice(0, 120),
       dueAt,
       leadMinutes: clampLeadMinutes(r.notificationSchedule?.leadMinutes ?? DEFAULT_LEAD_MINUTES),
-      snoozedUntil: Number.isFinite(sn) ? sn : null,
+      snoozedUntil: isSyncableInstant(sn) ? sn : null,
     });
   }
   return [...byId.values()].sort((a, b) => a.dueAt - b.dueAt).slice(0, max);

@@ -69,7 +69,7 @@ test('e2e: server delivers a real encrypted Web Push while no client is connecte
   const env = {
     ...process.env, NODE_ENV: 'production', PORT: String(port), NODE_TLS_REJECT_UNAUTHORIZED: '0',
     VAPID_PUBLIC_KEY: vapid.publicKey, VAPID_PRIVATE_KEY: vapid.privateKey, VAPID_SUBJECT: 'mailto:e2e@example.com',
-    CRON_SECRET: 'e2e-secret', PUSH_STORE_PATH: path.join(dir, 'store.json'), PUSH_LOCAL_SCHEDULER: '0',
+    CRON_SECRET: 'e2e-secret', PUSH_ALLOW_LOCAL_TEST_ENDPOINTS: '1', PUSH_STORE_PATH: path.join(dir, 'store.json'), PUSH_LOCAL_SCHEDULER: '0',
   };
   // Production mode serves ./dist; only the API matters here, so the SPA fallback may 404/500 without dist.
   const server: ChildProcess = spawn(process.execPath, ['--import', 'tsx', 'server.ts'], { env, stdio: 'pipe', cwd: process.cwd() });

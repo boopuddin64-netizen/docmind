@@ -10,6 +10,7 @@ import {
   parseTimeParts,
   type SyncedReminder,
 } from '../src/lib/schedule';
+import { validateReminders } from '../push-server/core';
 import { checkUpcomingAlerts } from '../src/lib/notifications';
 import { nextEventDelay, planAlerts, pruneFired, FIRED_RETENTION_MS } from '../src/lib/alertScheduler';
 import type { Reminder } from '../src/types';
@@ -227,4 +228,63 @@ test('checkUpcomingAlerts: day buckets, snooze, completed, overdue', () => {
   assert.deepEqual(out.map((a) => [a.reminderId, a.severity]), [
     ['over', 'urgent'], ['today', 'urgent'], ['iso', 'warning'], ['w', 'warning'], ['i', 'info'],
   ]);
+});
+
+test('parseTimeParts: am/pm must be attached to the time (word boundary): "12:00 Program" is noon, not midnight', () => {
+  assert.deepEqual(parseTimeParts('12:00 Program'), { h: 12, min: 0 });
+  assert.deepEqual(parseTimeParts('12:00 Program Overseer'), { h: 12, min: 0 });
+  assert.deepEqual(parseTimeParts('7:30 Amendment review'), { h: 7, min: 30 });
+  assert.deepEqual(parseTimeParts('6:15 Pmt due'), { h: 6, min: 15 });
+  assert.deepEqual(parseTimeParts('8:00 Ampersand'), { h: 8, min: 0 });
+  assert.deepEqual(parseTimeParts('Program 12:00'), { h: 12, min: 0 });
+  assert.deepEqual(parseTimeParts('1:00 pmx'), { h: 1, min: 0 }, '"pmx" is not a meridiem');
+});
+
+test('parseTimeParts: ranges use the FIRST time', () => {
+  assert.deepEqual(parseTimeParts('9:00 AM - 5:00 PM'), { h: 9, min: 0 });
+  assert.deepEqual(parseTimeParts('9:00-17:00'), { h: 9, min: 0 });
+  assert.deepEqual(parseTimeParts('1:30 PM – 3:00 PM'), { h: 13, min: 30 });
+  assert.deepEqual(parseTimeParts('11:00 AM to 1:00 PM'), { h: 11, min: 0 });
+  assert.deepEqual(parseTimeParts('10:00 to 11:00 PM'), { h: 10, min: 0 }, 'meridiem belongs to the time it is attached to');
+  assert.deepEqual(parseTimeParts('9 AM - 5 PM'), { h: 9, min: 0 });
+  assert.deepEqual(parseTimeParts('5 PM - 9 PM'), { h: 17, min: 0 });
+});
+
+test('parseTimeParts: 12 AM / 12 PM and meridiem spellings', () => {
+  assert.deepEqual(parseTimeParts('12:00 AM'), { h: 0, min: 0 });
+  assert.deepEqual(parseTimeParts('12:30 am'), { h: 0, min: 30 });
+  assert.deepEqual(parseTimeParts('12:00 PM'), { h: 12, min: 0 });
+  assert.deepEqual(parseTimeParts('12:45pm'), { h: 12, min: 45 });
+  assert.deepEqual(parseTimeParts('12 AM'), { h: 0, min: 0 });
+  assert.deepEqual(parseTimeParts('12 pm'), { h: 12, min: 0 });
+  assert.deepEqual(parseTimeParts('12am'), { h: 0, min: 0 });
+  assert.deepEqual(parseTimeParts('1:05 P.M.'), { h: 13, min: 5 });
+  assert.deepEqual(parseTimeParts('11:59 a.m.'), { h: 11, min: 59 });
+  assert.deepEqual(parseTimeParts('7:05pm'), { h: 19, min: 5 });
+  assert.deepEqual(parseTimeParts('at 9pm sharp'), { h: 21, min: 0 });
+  assert.deepEqual(parseTimeParts('Tuesday 3 PM'), { h: 15, min: 0 });
+  assert.deepEqual(parseTimeParts('13:00 PM'), { h: 13, min: 0 }, '24h value with a stray PM stays 13:00');
+  assert.deepEqual(parseTimeParts('0:30 AM'), { h: 0, min: 30 });
+});
+
+test('computeDueAt uses the fixed parser (no accidental 00:00 / 21:00)', () => {
+  assert.equal(computeDueAt('29/09/2026', '12:00 Program', 0), Date.UTC(2026, 8, 29, 12, 0));
+  assert.equal(computeDueAt('29/09/2026', '9:00 AM - 5:00 PM', 0), Date.UTC(2026, 8, 29, 9, 0));
+});
+
+test('buildSyncPayload: only sends what the server accepts (year <= 2100); out-of-range items are dropped, not the whole list', () => {
+  const now = computeDueAt('29/09/2026', '09:00 AM')!;
+  assert.ok(computeDueAt('01/01/2150', '09:00 AM')! > 4_102_444_800_000, 'precondition: parser itself still allows 2150');
+  const list = buildSyncPayload([
+    uiReminder({ id: 'ok' }),
+    uiReminder({ id: 'far', appointmentDate: '01/01/2150' }),
+    uiReminder({ id: 'edge', appointmentDate: '31/12/2099' }),
+    uiReminder({ id: 'snz-far', notificationSchedule: { snoozedUntil: '2500-01-01T00:00:00.000Z' } }),
+    uiReminder({ id: 'x'.repeat(101) }),
+  ], now);
+  assert.deepEqual(list.map((r) => r.id).sort(), ['edge', 'ok', 'snz-far']);
+  assert.equal(list.find((r) => r.id === 'snz-far')!.snoozedUntil, null);
+  // every item passes the server's validator unchanged
+  const v = validateReminders(list)!;
+  assert.equal(v.skipped, 0); assert.equal(v.reminders.length, list.length);
 });
