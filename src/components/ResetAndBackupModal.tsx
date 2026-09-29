@@ -14,7 +14,15 @@ import {
   Database,
 } from 'lucide-react';
 import { Reminder, UserProfile } from '../types';
-import { encryptVaultData, decryptVaultData } from '../lib/securityVault';
+import {
+  encryptBackup,
+  decryptBackup,
+  decryptLegacyBackup,
+  detectBackupFormat,
+  validatePassphrase,
+  VaultError,
+  MIN_PASSPHRASE_LENGTH,
+} from '../lib/securityVault';
 
 interface ResetAndBackupModalProps {
   isOpen: boolean;
@@ -39,12 +47,37 @@ export const ResetAndBackupModal: React.FC<ResetAndBackupModalProps> = ({
   const [restoreError, setRestoreError] = useState<string | null>(null);
   const [acceptTerms, setAcceptTerms] = useState(false);
 
+  // Export passphrase prompt
+  const [showExportForm, setShowExportForm] = useState(false);
+  const [exportPass, setExportPass] = useState('');
+  const [exportPassConfirm, setExportPassConfirm] = useState('');
+  const [exportError, setExportError] = useState<string | null>(null);
+  const [isExporting, setIsExporting] = useState(false);
+
+  // Import passphrase prompt (file content held in memory until the passphrase is entered)
+  const [pendingImport, setPendingImport] = useState<{ name: string; content: string } | null>(null);
+  const [importPass, setImportPass] = useState('');
+  const [isImporting, setIsImporting] = useState(false);
+  const [legacyNote, setLegacyNote] = useState(false);
+
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   if (!isOpen) return null;
 
-  // Encrypted Backup Download Handler
-  const handleDownloadEncryptedBackup = () => {
+  // Encrypted Backup Download Handler (AES-256-GCM, passphrase-derived key)
+  const handleDownloadEncryptedBackup = async () => {
+    setExportError(null);
+    const weak = validatePassphrase(exportPass);
+    if (weak) {
+      setExportError(weak);
+      return;
+    }
+    if (exportPass !== exportPassConfirm) {
+      setExportError('Passphrases do not match.');
+      return;
+    }
+
+    setIsExporting(true);
     try {
       const backupPayload = {
         version: '1.0',
@@ -53,8 +86,7 @@ export const ResetAndBackupModal: React.FC<ResetAndBackupModalProps> = ({
         userProfile,
       };
 
-      const jsonStr = JSON.stringify(backupPayload);
-      const encryptedData = encryptVaultData(jsonStr, 'DOCMIND-VAULT-256');
+      const encryptedData = await encryptBackup(JSON.stringify(backupPayload), exportPass);
 
       const blob = new Blob([encryptedData], { type: 'application/json;charset=utf-8' });
       const url = URL.createObjectURL(blob);
@@ -71,20 +103,85 @@ export const ResetAndBackupModal: React.FC<ResetAndBackupModalProps> = ({
       setTimeout(() => URL.revokeObjectURL(url), 1000);
 
       setBackupDownloaded(true);
+      setShowExportForm(false);
+      setExportPass('');
+      setExportPassConfirm('');
     } catch (err: any) {
-      alert(`Failed to generate encrypted backup: ${err.message}`);
+      setExportError(
+        err instanceof VaultError ? err.message : `Failed to generate encrypted backup: ${err?.message ?? 'unknown error'}`
+      );
+    } finally {
+      setIsExporting(false);
     }
   };
 
-  // Encrypted Backup Import/Restore Handler
+  // Parses decrypted/plain backup JSON and restores it
+  const restoreFromJson = (json: string, showLegacyNote: boolean) => {
+    const data = JSON.parse(json.trim());
+
+    let targetReminders: Reminder[] | null = null;
+    let targetProfile: UserProfile | undefined = undefined;
+
+    if (Array.isArray(data)) {
+      targetReminders = data;
+    } else if (data && typeof data === 'object') {
+      if (Array.isArray(data.reminders)) {
+        targetReminders = data.reminders;
+        targetProfile = data.userProfile;
+      } else if (Array.isArray(data.items)) {
+        targetReminders = data.items;
+        targetProfile = data.profile;
+      }
+    }
+
+    // targetReminders stays null for unrecognised JSON, so an invalid file can no longer wipe existing data.
+    if (targetReminders && onRestoreBackup) {
+      onRestoreBackup(targetReminders, targetProfile);
+      setIsRestoreSuccess(true);
+      setLegacyNote(showLegacyNote);
+      setPendingImport(null);
+      setImportPass('');
+      // Give the user time to read the re-export note before the page reloads.
+      setTimeout(() => {
+        onClose();
+        window.location.reload();
+      }, showLegacyNote ? 6000 : 1200);
+    } else {
+      throw new Error('Invalid backup structure');
+    }
+  };
+
+  // Decides how to handle a freshly selected backup file
+  const processImportContent = async (rawContent: string, fileName: string) => {
+    const format = detectBackupFormat(rawContent);
+
+    if (format === 'encrypted') {
+      // Ask for the passphrase before attempting decryption
+      setPendingImport({ name: fileName, content: rawContent });
+      setImportPass('');
+      return;
+    }
+
+    if (format === 'legacy') {
+      restoreFromJson(decryptLegacyBackup(rawContent), true);
+      return;
+    }
+
+    // Plain (unencrypted) JSON backup
+    restoreFromJson(rawContent, false);
+  };
+
   const handleImportBackup = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
+    const input = e.target;
+    const file = input.files?.[0];
     if (!file) return;
 
     setRestoreError(null);
+    setPendingImport(null);
+    setLegacyNote(false);
     const reader = new FileReader();
 
-    reader.onload = (event) => {
+    reader.onload = async (event) => {
       try {
         let rawContent = (event.target?.result as string) || '';
         // Remove UTF-8 BOM if present
@@ -93,60 +190,53 @@ export const ResetAndBackupModal: React.FC<ResetAndBackupModalProps> = ({
         }
         rawContent = rawContent.trim();
 
-        if (!rawContent) throw new Error("Empty backup file");
+        if (!rawContent) throw new Error('Empty backup file');
 
-        let decryptedJson = '';
-        try {
-          // Attempt vault decryption
-          decryptedJson = decryptVaultData(rawContent, 'DOCMIND-VAULT-256');
-        } catch {
-          // Fallback if unencrypted raw json
-          decryptedJson = rawContent;
-        }
-
-        const cleanJson = decryptedJson.trim();
-        const data = JSON.parse(cleanJson);
-
-        let targetReminders: Reminder[] | null = null;
-        let targetProfile: UserProfile | undefined = undefined;
-
-        if (Array.isArray(data)) {
-          targetReminders = data;
-        } else if (data && typeof data === 'object') {
-          if (Array.isArray(data.reminders)) {
-            targetReminders = data.reminders;
-            targetProfile = data.userProfile;
-          } else if (Array.isArray(data.items)) {
-            targetReminders = data.items;
-            targetProfile = data.profile;
-          }
-        }
-
-        // targetReminders stays null for unrecognised JSON, so an invalid file can no longer wipe existing data.
-        if (targetReminders && onRestoreBackup) {
-          onRestoreBackup(targetReminders, targetProfile);
-          setIsRestoreSuccess(true);
-          setTimeout(() => {
-            onClose();
-            window.location.reload();
-          }, 1200);
-        } else {
-          throw new Error("Invalid backup structure");
-        }
+        await processImportContent(rawContent, file.name);
       } catch (err: any) {
-        console.error("Mobile backup import failed:", err);
-        setRestoreError("Unable to read backup file. Please select a valid DocuMind backup (.dmback or .json).");
+        console.error('Backup import failed:', err);
+        setRestoreError(
+          err instanceof VaultError
+            ? err.message
+            : 'Unable to read backup file. Please select a valid DocuMind backup (.dmback or .json).'
+        );
       } finally {
-        e.target.value = '';
+        input.value = '';
       }
     };
 
     reader.onerror = () => {
-      setRestoreError("Error reading backup file on this device.");
-      e.target.value = '';
+      setRestoreError('Error reading backup file on this device.');
+      input.value = '';
     };
 
     reader.readAsText(file);
+  };
+
+  const handleConfirmImportPassphrase = async () => {
+    if (!pendingImport) return;
+    setRestoreError(null);
+    if (!importPass) {
+      setRestoreError('Enter the passphrase used when this backup was created.');
+      return;
+    }
+    setIsImporting(true);
+    try {
+      const json = await decryptBackup(pendingImport.content, importPass);
+      restoreFromJson(json, false);
+    } catch (err: any) {
+      if (err instanceof VaultError) {
+        setRestoreError(
+          err.code === 'DECRYPT_FAILED'
+            ? 'Could not decrypt: wrong passphrase, or the backup file is corrupt or has been modified.'
+            : err.message
+        );
+      } else {
+        setRestoreError('Backup decrypted but its contents are not a valid DocuMind backup.');
+      }
+    } finally {
+      setIsImporting(false);
+    }
   };
 
   return (
@@ -235,27 +325,87 @@ export const ResetAndBackupModal: React.FC<ResetAndBackupModalProps> = ({
 
               {/* Action Buttons for Step 1 */}
               <div className="space-y-3 pt-1">
-                <button
-                  onClick={handleDownloadEncryptedBackup}
-                  className={`w-full py-3 px-4 rounded-2xl font-bold text-xs flex items-center justify-center gap-2 shadow-sm transition-all ${
-                    backupDownloaded
-                      ? 'bg-emerald-600 text-white'
-                      : 'bg-[#0284c7] hover:bg-[#0369a1] text-white'
-                  }`}
-                  id="btn-[#0284c7]-download-encrypted-backup"
-                >
-                  {backupDownloaded ? (
-                    <React.Fragment key="backup-done">
-                      <CheckCircle2 className="w-4 h-4" />
-                      <span>Encrypted Backup Saved (.dmback)</span>
-                    </React.Fragment>
-                  ) : (
-                    <React.Fragment key="backup-[#0284c7]">
-                      <Download className="w-4 h-4" />
-                      <span>Download Encrypted Backup File</span>
-                    </React.Fragment>
-                  )}
-                </button>
+                {showExportForm ? (
+                  <form
+                    className="space-y-2 bg-[#f8fafb] dark:bg-[#07131e] p-3 rounded-2xl border border-[#e1e3e4] dark:border-sky-900/40"
+                    onSubmit={(e) => {
+                      e.preventDefault();
+                      void handleDownloadEncryptedBackup();
+                    }}
+                  >
+                    <p className="text-[11px] text-[#3f4945] dark:text-sky-300/80 leading-relaxed">
+                      Choose a passphrase to encrypt this backup (min. {MIN_PASSPHRASE_LENGTH} characters). It cannot be recovered if you forget it.
+                    </p>
+                    <input
+                      type="password"
+                      autoComplete="new-password"
+                      value={exportPass}
+                      onChange={(e) => setExportPass(e.target.value)}
+                      placeholder="Passphrase"
+                      className="w-full px-3 py-2 rounded-xl border border-[#e1e3e4] dark:border-sky-900/40 bg-white dark:bg-[#0c1e2e] text-xs text-[#191c1d] dark:text-white"
+                      id="input-backup-passphrase"
+                    />
+                    <input
+                      type="password"
+                      autoComplete="new-password"
+                      value={exportPassConfirm}
+                      onChange={(e) => setExportPassConfirm(e.target.value)}
+                      placeholder="Confirm passphrase"
+                      className="w-full px-3 py-2 rounded-xl border border-[#e1e3e4] dark:border-sky-900/40 bg-white dark:bg-[#0c1e2e] text-xs text-[#191c1d] dark:text-white"
+                      id="input-backup-passphrase-confirm"
+                    />
+                    {exportError && <p className="text-xs font-bold text-red-600">{exportError}</p>}
+                    <div className="flex gap-2">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setShowExportForm(false);
+                          setExportPass('');
+                          setExportPassConfirm('');
+                          setExportError(null);
+                        }}
+                        className="px-3 py-2 rounded-xl border border-[#e1e3e4] dark:border-sky-900/40 text-xs font-bold text-[#3f4945] dark:text-sky-300"
+                      >
+                        Cancel
+                      </button>
+                      <button
+                        type="submit"
+                        disabled={isExporting}
+                        className="flex-1 py-2 px-4 rounded-xl font-bold text-xs flex items-center justify-center gap-2 bg-[#0284c7] hover:bg-[#0369a1] text-white disabled:opacity-60"
+                        id="btn-confirm-encrypted-backup"
+                      >
+                        <Download className="w-4 h-4" />
+                        <span>{isExporting ? 'Encrypting…' : 'Encrypt & Download'}</span>
+                      </button>
+                    </div>
+                  </form>
+                ) : (
+                  <button
+                    onClick={() => {
+                      setExportError(null);
+                      setBackupDownloaded(false);
+                      setShowExportForm(true);
+                    }}
+                    className={`w-full py-3 px-4 rounded-2xl font-bold text-xs flex items-center justify-center gap-2 shadow-sm transition-all ${
+                      backupDownloaded
+                        ? 'bg-emerald-600 text-white'
+                        : 'bg-[#0284c7] hover:bg-[#0369a1] text-white'
+                    }`}
+                    id="btn-[#0284c7]-download-encrypted-backup"
+                  >
+                    {backupDownloaded ? (
+                      <React.Fragment key="backup-done">
+                        <CheckCircle2 className="w-4 h-4" />
+                        <span>Encrypted Backup Saved (.dmback) — click to export again</span>
+                      </React.Fragment>
+                    ) : (
+                      <React.Fragment key="backup-[#0284c7]">
+                        <Download className="w-4 h-4" />
+                        <span>Download Encrypted Backup File</span>
+                      </React.Fragment>
+                    )}
+                  </button>
+                )}
 
                 {/* Restore / Import Backup Option */}
                 <div className="pt-2 border-t border-[#f2f4f5] dark:border-sky-900/30 flex items-center justify-between">
@@ -274,9 +424,59 @@ export const ResetAndBackupModal: React.FC<ResetAndBackupModalProps> = ({
                   </label>
                 </div>
 
+                {pendingImport && !isRestoreSuccess && (
+                  <form
+                    className="space-y-2 bg-[#f8fafb] dark:bg-[#07131e] p-3 rounded-2xl border border-[#e1e3e4] dark:border-sky-900/40"
+                    onSubmit={(e) => {
+                      e.preventDefault();
+                      void handleConfirmImportPassphrase();
+                    }}
+                  >
+                    <p className="text-[11px] text-[#3f4945] dark:text-sky-300/80 leading-relaxed">
+                      Enter the passphrase for <span className="font-bold break-all">{pendingImport.name}</span>.
+                    </p>
+                    <input
+                      type="password"
+                      autoComplete="current-password"
+                      value={importPass}
+                      onChange={(e) => setImportPass(e.target.value)}
+                      placeholder="Backup passphrase"
+                      className="w-full px-3 py-2 rounded-xl border border-[#e1e3e4] dark:border-sky-900/40 bg-white dark:bg-[#0c1e2e] text-xs text-[#191c1d] dark:text-white"
+                      id="input-import-passphrase"
+                    />
+                    <div className="flex gap-2">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setPendingImport(null);
+                          setImportPass('');
+                          setRestoreError(null);
+                        }}
+                        className="px-3 py-2 rounded-xl border border-[#e1e3e4] dark:border-sky-900/40 text-xs font-bold text-[#3f4945] dark:text-sky-300"
+                      >
+                        Cancel
+                      </button>
+                      <button
+                        type="submit"
+                        disabled={isImporting}
+                        className="flex-1 py-2 px-4 rounded-xl font-bold text-xs bg-[#0284c7] hover:bg-[#0369a1] text-white disabled:opacity-60"
+                        id="btn-confirm-import-passphrase"
+                      >
+                        {isImporting ? 'Decrypting…' : 'Decrypt & Restore'}
+                      </button>
+                    </div>
+                  </form>
+                )}
+
                 {isRestoreSuccess && (
                   <p className="text-xs font-bold text-emerald-600 text-center animate-bounce">
                     ✓ Encrypted backup imported successfully! Reloading...
+                  </p>
+                )}
+
+                {isRestoreSuccess && legacyNote && (
+                  <p className="text-xs font-semibold text-amber-700 dark:text-amber-300 text-center bg-amber-50 dark:bg-amber-950/40 border border-amber-200 dark:border-amber-900/60 p-2 rounded-xl">
+                    This was an old-format backup that is not truly secure (it used a built-in key). Please export a new passphrase-protected backup and delete the old file.
                   </p>
                 )}
 

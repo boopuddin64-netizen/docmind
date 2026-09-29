@@ -22,11 +22,11 @@ export const NotificationCenterDrawer: React.FC<NotificationCenterDrawerProps> =
   notificationsEnabled = true,
   onToggleNotifications,
 }) => {
-  if (!isOpen) return null;
-
   const [hasPushPermission, setHasPushPermission] = useState<boolean>(
     'Notification' in window && Notification.permission === 'granted'
   );
+
+  if (!isOpen) return null;
 
   const handleEnablePush = async () => {
     const granted = await requestNotificationPermission();
@@ -187,7 +187,7 @@ export const NotificationCenterDrawer: React.FC<NotificationCenterDrawerProps> =
 
         {/* Drawer Footer */}
         <div className="p-3 bg-slate-50 dark:bg-[#07131e] border-t border-slate-200 dark:border-sky-900/40 text-[11px] text-slate-500 dark:text-sky-300/70 text-center">
-          Alert Dispatcher active • Auto-checks every hour
+          Alert Dispatcher active • Checks continuously while open; Web Push covers closed-app alerts
         </div>
       </div>
     </div>
