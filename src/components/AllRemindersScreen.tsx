@@ -69,7 +69,7 @@ export const AllRemindersScreen: React.FC<AllRemindersScreenProps> = ({
 
   const isFiltered = searchQuery.trim() !== '' || selectedCategory !== 'All' || selectedPatient !== 'All' || showCompleted;
 
-  const mainUserName = userProfile?.name || 'Promise Ledum';
+  const mainUserName = userProfile?.name || '';
   const registeredFamily = (userProfile?.familyMembers || []).map((f) => f.name).filter(Boolean);
   const allRegisteredProfileNames = Array.from(new Set([mainUserName, ...registeredFamily]));
 

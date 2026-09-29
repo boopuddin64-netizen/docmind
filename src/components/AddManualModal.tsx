@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import { X, Calendar, Clock, User, Bell, Plus, Building } from 'lucide-react';
 import { Reminder, ReminderCategory, UserProfile } from '../types';
+import { selfMatchLabel } from '../lib/profileMatch';
 
 interface AddManualModalProps {
   isOpen: boolean;
@@ -35,9 +36,7 @@ export const AddManualModal: React.FC<AddManualModalProps> = ({
       eventTitle,
       hospitalName,
       patientName,
-      patientMatch: (/promise/i.test(patientName) || patientName.toLowerCase() === 'self')
-        ? 'Matches Profile: Self'
-        : 'Matches Profile: Household',
+      patientMatch: selfMatchLabel(patientName, userProfile.name),
       diagnosis: diagnosis || 'Routine Medical Checkup',
       appointmentDate,
       appointmentTime,

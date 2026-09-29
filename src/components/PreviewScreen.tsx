@@ -12,6 +12,7 @@ import {
   CheckCircle2,
 } from 'lucide-react';
 import { ExtractedDocData, UserProfile, Reminder } from '../types';
+import { selfMatchLabel } from '../lib/profileMatch';
 
 interface PreviewScreenProps {
   extractedData: ExtractedDocData;
@@ -296,7 +297,7 @@ export const PreviewScreen: React.FC<PreviewScreenProps> = ({
             <div className="flex items-center gap-1 text-xs text-[#0284c7] dark:text-sky-400 font-semibold pt-0.5">
               <CheckCircle2 className="w-3.5 h-3.5" />
               <span>
-                {/promise/i.test(activeItem.patientName || '') ? "Matches Profile: Self" : "Matches Profile: Household"}
+                {selfMatchLabel(activeItem.patientName, userProfile.name)}
               </span>
             </div>
           </div>

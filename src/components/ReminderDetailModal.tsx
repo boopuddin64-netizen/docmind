@@ -15,7 +15,8 @@ import {
   Pencil,
   Save,
 } from 'lucide-react';
-import { Reminder, ReminderCategory } from '../types';
+import { Reminder, ReminderCategory, UserProfile } from '../types';
+import { selfMatchLabel } from '../lib/profileMatch';
 import { downloadIcsCalendar } from '../lib/icalHelper';
 
 interface ReminderDetailModalProps {
@@ -24,6 +25,7 @@ interface ReminderDetailModalProps {
   onToggleComplete: (id: string) => void;
   onDelete: (id: string) => void;
   onUpdateReminder?: (updated: Reminder) => void;
+  userProfile?: UserProfile;
 }
 
 export const ReminderDetailModal: React.FC<ReminderDetailModalProps> = ({
@@ -32,18 +34,17 @@ export const ReminderDetailModal: React.FC<ReminderDetailModalProps> = ({
   onToggleComplete,
   onDelete,
   onUpdateReminder,
+  userProfile,
 }) => {
-  if (!reminder) return null;
-
   const [isEditing, setIsEditing] = React.useState<boolean>(false);
-  const [eventTitle, setEventTitle] = React.useState<string>(reminder.eventTitle);
-  const [category, setCategory] = React.useState<ReminderCategory>(reminder.category);
-  const [patientName, setPatientName] = React.useState<string>(reminder.patientName);
-  const [hospitalName, setHospitalName] = React.useState<string>(reminder.hospitalName);
-  const [appointmentDate, setAppointmentDate] = React.useState<string>(reminder.appointmentDate);
-  const [appointmentTime, setAppointmentTime] = React.useState<string>(reminder.appointmentTime);
-  const [diagnosis, setDiagnosis] = React.useState<string>(reminder.diagnosis);
-  const [shortNote, setShortNote] = React.useState<string>(reminder.shortNote);
+  const [eventTitle, setEventTitle] = React.useState<string>(reminder?.eventTitle ?? '');
+  const [category, setCategory] = React.useState<ReminderCategory>(reminder?.category ?? 'General');
+  const [patientName, setPatientName] = React.useState<string>(reminder?.patientName ?? '');
+  const [hospitalName, setHospitalName] = React.useState<string>(reminder?.hospitalName ?? '');
+  const [appointmentDate, setAppointmentDate] = React.useState<string>(reminder?.appointmentDate ?? '');
+  const [appointmentTime, setAppointmentTime] = React.useState<string>(reminder?.appointmentTime ?? '');
+  const [diagnosis, setDiagnosis] = React.useState<string>(reminder?.diagnosis ?? '');
+  const [shortNote, setShortNote] = React.useState<string>(reminder?.shortNote ?? '');
 
   // Sync edit state if reminder prop changes
   React.useEffect(() => {
@@ -60,6 +61,9 @@ export const ReminderDetailModal: React.FC<ReminderDetailModalProps> = ({
     }
   }, [reminder]);
 
+  // Hooks must run on every render, so the null guard lives after them (Rules of Hooks).
+  if (!reminder) return null;
+
   const handleSave = () => {
     if (!onUpdateReminder) return;
     const updated: Reminder = {
@@ -67,9 +71,7 @@ export const ReminderDetailModal: React.FC<ReminderDetailModalProps> = ({
       eventTitle,
       category,
       patientName,
-      patientMatch: (/promise/i.test(patientName) || patientName.toLowerCase() === 'self')
-        ? 'Matches Profile: Self'
-        : 'Matches Profile: Household',
+      patientMatch: selfMatchLabel(patientName, userProfile?.name),
       hospitalName,
       appointmentDate,
       appointmentTime,

@@ -107,7 +107,7 @@ export const ResetAndBackupModal: React.FC<ResetAndBackupModalProps> = ({
         const cleanJson = decryptedJson.trim();
         const data = JSON.parse(cleanJson);
 
-        let targetReminders: Reminder[] = [];
+        let targetReminders: Reminder[] | null = null;
         let targetProfile: UserProfile | undefined = undefined;
 
         if (Array.isArray(data)) {
@@ -122,6 +122,7 @@ export const ResetAndBackupModal: React.FC<ResetAndBackupModalProps> = ({
           }
         }
 
+        // targetReminders stays null for unrecognised JSON, so an invalid file can no longer wipe existing data.
         if (targetReminders && onRestoreBackup) {
           onRestoreBackup(targetReminders, targetProfile);
           setIsRestoreSuccess(true);

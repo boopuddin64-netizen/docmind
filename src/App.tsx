@@ -486,6 +486,7 @@ export default function App() {
         onToggleComplete={handleToggleComplete}
         onDelete={handleDeleteReminder}
         onUpdateReminder={handleUpdateReminder}
+        userProfile={userProfile}
       />
 
       {/* Layer 5: Human in the loop review modal */}
