@@ -3,6 +3,8 @@ import path from "path";
 import { createServer as createViteServer } from "vite";
 import { GoogleGenAI, Type } from "@google/genai";
 import dotenv from "dotenv";
+import { buildIcsContent, icsFilename } from "./src/lib/icsBuilder";
+import { escapeRegExp } from "./src/lib/profileMatch";
 
 dotenv.config();
 
@@ -22,102 +24,24 @@ const getGeminiClient = () => {
 
 async function startServer() {
   const app = express();
-  const PORT = 3000;
+  const PORT = Number(process.env.PORT) || 3000;
 
   app.use(express.json({ limit: "25mb" }));
 
   // API: Download iCal (.ics) Calendar File
   app.get("/api/download-ics", (req, res) => {
     try {
-      const title = String(req.query.title || 'Reminder').trim();
-      const note = String(req.query.note || '').replace(/\n/g, '\\n').trim();
-      const location = String(req.query.location || '').replace(/\n/g, ' ').trim();
-      const recipient = String(req.query.recipient || '').trim();
-      const appointmentDate = String(req.query.date || '').trim();
-      const appointmentTime = String(req.query.time || '08:00 AM').trim();
-
-      let year = new Date().getFullYear();
-      let month = new Date().getMonth() + 1;
-      let day = new Date().getDate();
-
-      if (appointmentDate) {
-        const ddmmyyyy = appointmentDate.match(/^(\d{1,2})[\/\.-](\d{1,2})[\/\.-](\d{4})$/);
-        if (ddmmyyyy) {
-          day = parseInt(ddmmyyyy[1], 10);
-          month = parseInt(ddmmyyyy[2], 10);
-          year = parseInt(ddmmyyyy[3], 10);
-        } else {
-          const yyyymmdd = appointmentDate.match(/^(\d{4})[\/\.-](\d{1,2})[\/\.-](\d{1,2})$/);
-          if (yyyymmdd) {
-            year = parseInt(yyyymmdd[1], 10);
-            month = parseInt(yyyymmdd[2], 10);
-            day = parseInt(yyyymmdd[3], 10);
-          } else {
-            const parsed = new Date(appointmentDate);
-            if (!isNaN(parsed.getTime())) {
-              year = parsed.getFullYear();
-              month = parsed.getMonth() + 1;
-              day = parsed.getDate();
-            }
-          }
-        }
-      }
-
-      let hours = 8;
-      let minutes = 0;
-      if (appointmentTime) {
-        const isPM = /pm/i.test(appointmentTime);
-        const isAM = /am/i.test(appointmentTime);
-        const match = appointmentTime.match(/(\d{1,2}):(\d{2})/);
-        if (match) {
-          hours = parseInt(match[1], 10);
-          minutes = parseInt(match[2], 10);
-          if (isPM && hours < 12) hours += 12;
-          if (isAM && hours === 12) hours = 0;
-        }
-      }
-
-      const yStr = String(year);
-      const mStr = String(month).padStart(2, '0');
-      const dStr = String(day).padStart(2, '0');
-      const hhStr = String(hours).padStart(2, '0');
-      const mmStr = String(minutes).padStart(2, '0');
-
-      const dtStart = `${yStr}${mStr}${dStr}T${hhStr}${mmStr}00`;
-
-      let endHours = hours + 1;
-      let endDay = day;
-      if (endHours >= 24) {
-        endHours -= 24;
-        endDay += 1;
-      }
-      const endHhStr = String(endHours).padStart(2, '0');
-      const endDStr = String(endDay).padStart(2, '0');
-      const dtEnd = `${yStr}${mStr}${endDStr}T${endHhStr}${mmStr}00`;
-
-      const description = `${note}${recipient ? ` (For: ${recipient})` : ''} - DocuMind Reminder`;
-
-      const icsLines = [
-        'BEGIN:VCALENDAR',
-        'VERSION:2.0',
-        'PRODID:-//DocuMind Reminders//EN',
-        'CALSCALE:GREGORIAN',
-        'METHOD:PUBLISH',
-        'BEGIN:VEVENT',
-        `UID:docmind-${Date.now()}-${Math.floor(Math.random() * 10000)}@app`,
-        `DTSTAMP:${yStr}${mStr}${dStr}T${hhStr}${mmStr}00Z`,
-        `DTSTART:${dtStart}`,
-        `DTEND:${dtEnd}`,
-        `SUMMARY:${title}`,
-        `DESCRIPTION:${description}`,
-        `LOCATION:${location}`,
-        'STATUS:CONFIRMED',
-        'END:VEVENT',
-        'END:VCALENDAR'
-      ];
-
-      const icsContent = icsLines.join('\r\n');
-      const filename = `${title.replace(/[^a-zA-Z0-9]/g, '_')}.ics`;
+      const q = (k: string, def = '') => (typeof req.query[k] === 'string' ? (req.query[k] as string) : def);
+      const title = q('title', 'Reminder');
+      const icsContent = buildIcsContent({
+        title,
+        note: q('note'),
+        location: q('location'),
+        recipient: q('recipient'),
+        date: q('date'),
+        time: q('time', '08:00 AM'),
+      });
+      const filename = icsFilename(title);
 
       res.setHeader('Content-Type', 'text/calendar; charset=utf-8');
       res.setHeader('Content-Disposition', `inline; filename="${filename}"`);
@@ -296,7 +220,7 @@ Document text/filename context: ${documentText || "Scan image provided"}`;
 
           // Check registered list first
           for (const regName of registeredList) {
-            if (regName && (new RegExp(regName, 'i').test(pName) || new RegExp(regName, 'i').test(text))) {
+            if (regName && (new RegExp(escapeRegExp(regName), 'i').test(pName) || new RegExp(escapeRegExp(regName), 'i').test(text))) {
               const isSelf = regName.toLowerCase().includes(mainUserFirstName.toLowerCase());
               return {
                 name: regName,
@@ -306,7 +230,7 @@ Document text/filename context: ${documentText || "Scan image provided"}`;
           }
 
           // Check if pName mentions main user
-          if (pName && new RegExp(mainUserFirstName, 'i').test(pName)) {
+          if (pName && new RegExp(escapeRegExp(mainUserFirstName), 'i').test(pName)) {
             return { name: mainUser, match: "Matches Profile: Self" };
           }
 
@@ -352,7 +276,8 @@ Document text/filename context: ${documentText || "Scan image provided"}`;
         for (const item of rawItemsList) {
           const dateStr = item.appointmentDate || "";
           const splitDates = dateStr.split(/,|&|\band\b/i).map((s: string) => s.trim()).filter((s: string) => s.length > 0);
-          if (splitDates.length > 1) {
+          // Don't split "Sep 13, 2026" into "Sep 13" + "2026": a bare year is not a date.
+          if (splitDates.length > 1 && !splitDates.some((s: string) => /^\d{4}$/.test(s))) {
             splitDates.forEach((singleDate: string, dIdx: number) => {
               itemsList.push({
                 ...item,

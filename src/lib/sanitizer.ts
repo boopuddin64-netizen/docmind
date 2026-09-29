@@ -1,4 +1,5 @@
 import { ExtractedDocData, FieldConfidence, ReminderCategory, UserProfile } from '../types';
+import { isSelfName } from './profileMatch';
 
 const VALID_CATEGORIES: ReminderCategory[] = [
   'Medical',
@@ -14,6 +15,11 @@ const VALID_CATEGORIES: ReminderCategory[] = [
   'Lab Tests',
   'Specialist',
 ];
+
+function isRealCalendarDate(y: number, m: number, d: number): boolean {
+  const dt = new Date(Date.UTC(y, m - 1, d));
+  return dt.getUTCFullYear() === y && dt.getUTCMonth() === m - 1 && dt.getUTCDate() === d;
+}
 
 /**
  * Normalizes date input into standard DD/MM/YYYY format
@@ -33,7 +39,7 @@ export function normalizeDate(inputDate: string): { formatted: string; isValid: 
     const day = parseInt(ddmmyyyyMatch[1], 10);
     const month = parseInt(ddmmyyyyMatch[2], 10);
     const year = parseInt(ddmmyyyyMatch[3], 10);
-    if (day >= 1 && day <= 31 && month >= 1 && month <= 12 && year >= 2000 && year <= 2100) {
+    if (isRealCalendarDate(year, month, day) && year >= 2000 && year <= 2100) {
       const dStr = String(day).padStart(2, '0');
       const mStr = String(month).padStart(2, '0');
       return {
@@ -50,7 +56,7 @@ export function normalizeDate(inputDate: string): { formatted: string; isValid: 
     const year = parseInt(yyyymmddMatch[1], 10);
     const month = parseInt(yyyymmddMatch[2], 10);
     const day = parseInt(yyyymmddMatch[3], 10);
-    if (day >= 1 && day <= 31 && month >= 1 && month <= 12 && year >= 2000 && year <= 2100) {
+    if (isRealCalendarDate(year, month, day) && year >= 2000 && year <= 2100) {
       const dStr = String(day).padStart(2, '0');
       const mStr = String(month).padStart(2, '0');
       return {
@@ -151,9 +157,8 @@ export function sanitizeAndValidateDocData(
 
   const firstSub = (sanitizedItems && sanitizedItems.length > 0) ? sanitizedItems[0] : null;
 
-  const isSelf = /promise/i.test(patientName) || patientName.toLowerCase() === 'self';
-  const isPagbara = /pagbara/i.test(patientName) || (/ledum/i.test(patientName) && !isSelf);
-  const calculatedMatch = isSelf ? 'Matches Profile: Self' : (isPagbara ? 'Matches Profile: Household' : (raw.patientMatch || 'Matches Profile: Household'));
+  const isSelf = isSelfName(patientName, userProfile?.name);
+  const calculatedMatch = isSelf ? 'Matches Profile: Self' : (raw.patientMatch || 'Matches Profile: Household');
 
   return {
     hospitalName: firstSub ? firstSub.hospitalName : hospitalName,
