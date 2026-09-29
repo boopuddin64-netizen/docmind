@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { AnimatedAppIntro } from './components/AnimatedAppIntro';
 import { HomeScreen } from './components/HomeScreen';
 import { AllRemindersScreen } from './components/AllRemindersScreen';
@@ -25,6 +25,8 @@ import { INITIAL_REMINDERS, INITIAL_USER_PROFILE } from './data/mockData';
 import { sanitizeAndValidateDocData } from './lib/sanitizer';
 import { checkForDuplicateReminder, generateCompositeDedupHash } from './lib/deduplication';
 import { checkUpcomingAlerts, dispatchNativeNotification, requestNotificationPermission } from './lib/notifications';
+import { FIRED_STORAGE_KEY, loadPushFiredKeys, nextEventDelay, planAlerts, type FiredMap } from './lib/alertScheduler';
+import { disablePush, enablePush, pushSupported } from './lib/pushClient';
 import { DEFAULT_SECURITY_SETTINGS, createAuditLog } from './lib/securityVault';
 import { CheckCircle2, BellRing } from 'lucide-react';
 
@@ -43,6 +45,9 @@ export default function App() {
       return INITIAL_REMINDERS;
     }
   });
+
+  const remindersRef = useRef<Reminder[]>([]);
+  remindersRef.current = reminders;
 
   const [userProfile, setUserProfile] = useState<UserProfile>(() => {
     const saved = localStorage.getItem('docreminder_profile');
@@ -67,7 +72,12 @@ export default function App() {
 
   const [notificationsEnabled, setNotificationsEnabled] = useState<boolean>(() => {
     const saved = localStorage.getItem('docreminder_notifications');
-    return saved !== null ? JSON.parse(saved) : true;
+    if (saved === null) return true;
+    try {
+      return Boolean(JSON.parse(saved));
+    } catch {
+      return true;
+    }
   });
 
   useEffect(() => {
@@ -97,25 +107,36 @@ export default function App() {
     if (nextState) {
       showToast('Notifications Enabled');
       const granted = await requestNotificationPermission();
-      dispatchNativeNotification(
-        'DocuMind Device Pop-Up Alerts Active',
-        'Device notifications are enabled. You will receive real-time alerts for appointments and deadlines!'
-      );
+      if (granted) {
+        void dispatchNativeNotification(
+          'DocuMind Device Pop-Up Alerts Active',
+          'Device notifications are enabled. You will receive real-time alerts for appointments and deadlines!'
+        );
+        void enablePush(remindersRef.current);
+      } else {
+        showToast('Browser notifications are blocked - alerts will show inside the app only');
+      }
       if (activeAlerts.length > 0) {
         setIsDeviceAlertPopupOpen(true);
       }
     } else {
       showToast('Notifications Muted');
+      void disablePush();
     }
   };
 
   const handleTestDeviceAlert = async () => {
     setNotificationsEnabled(true);
-    await requestNotificationPermission();
-    dispatchNativeNotification(
-      'DocuMind Device Pop-Up Alert Test',
-      'Device notification pop-up system working successfully on this device!'
-    );
+    const granted = await requestNotificationPermission();
+    if (granted) {
+      void dispatchNativeNotification(
+        'DocuMind Device Pop-Up Alert Test',
+        'Device notification pop-up system working successfully on this device!',
+        undefined,
+        'docmind-test'
+      );
+      void enablePush(remindersRef.current);
+    }
     setIsDeviceAlertPopupOpen(true);
     showToast('Testing Device Pop-Up Alert...');
   };
@@ -152,12 +173,9 @@ export default function App() {
     if (notificationsEnabled && activeAlerts.length > 0 && !hasAutoPromptedAlerts) {
       const urgentItems = activeAlerts.filter((a) => a.severity === 'urgent');
       if (urgentItems.length > 0) {
+        // In-app popup only. System notifications are fired (once per event) by the alert scheduler below.
         setIsDeviceAlertPopupOpen(true);
         setHasAutoPromptedAlerts(true);
-        dispatchNativeNotification(
-          `Urgent Deadline Notice: ${urgentItems[0].title}`,
-          urgentItems[0].message
-        );
       }
     }
   }, [notificationsEnabled, activeAlerts, hasAutoPromptedAlerts]);
@@ -166,6 +184,118 @@ export default function App() {
   useEffect(() => {
     localStorage.setItem('docreminder_items', JSON.stringify(reminders));
   }, [reminders]);
+
+  // ── Alert scheduler: fires each due / heads-up event exactly once, also catches ones missed while the app was closed ──
+  useEffect(() => {
+    if (!notificationsEnabled) return;
+    let cancelled = false;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+
+    const readFired = (): FiredMap => {
+      try {
+        const v = JSON.parse(localStorage.getItem(FIRED_STORAGE_KEY) || '{}');
+        return v && typeof v === 'object' ? v : {};
+      } catch {
+        return {};
+      }
+    };
+
+    const run = async () => {
+      const now = Date.now();
+      const pushKeys = await loadPushFiredKeys(); // alerts the service worker already showed via Web Push
+      if (cancelled) return;
+      const fired = readFired();
+      for (const k of pushKeys) if (!(k in fired)) fired[k] = now;
+      const plan = planAlerts(remindersRef.current, fired, now);
+      localStorage.setItem(FIRED_STORAGE_KEY, JSON.stringify(plan.fired));
+      if (plan.notifications.length === 0) return;
+      const granted = 'Notification' in window && Notification.permission === 'granted';
+      if (granted) {
+        for (const n of plan.notifications) {
+          await dispatchNativeNotification(n.title, n.body, undefined, n.tag, n.reminderId);
+        }
+      } else {
+        // Permission denied / unsupported: fall back to in-app UI so the alert is never silently lost.
+        showToastRef.current(`${plan.notifications[0].title}: ${plan.notifications[0].body}`);
+        setIsDeviceAlertPopupOpen(true);
+      }
+    };
+
+    const loop = async () => {
+      try {
+        await run();
+      } catch (e) {
+        console.warn('Alert scheduler error:', e);
+      }
+      if (cancelled) return;
+      const delay = nextEventDelay(remindersRef.current, {}, Date.now());
+      timer = setTimeout(loop, Math.max(1000, Math.min(30000, delay === null ? 30000 : delay + 250)));
+    };
+    loop();
+
+    const wake = () => {
+      if (document.visibilityState === 'visible') {
+        if (timer) clearTimeout(timer);
+        loop();
+      }
+    };
+    document.addEventListener('visibilitychange', wake);
+    window.addEventListener('focus', wake);
+    window.addEventListener('pageshow', wake);
+    return () => {
+      cancelled = true;
+      if (timer) clearTimeout(timer);
+      document.removeEventListener('visibilitychange', wake);
+      window.removeEventListener('focus', wake);
+      window.removeEventListener('pageshow', wake);
+    };
+  }, [notificationsEnabled, reminders]);
+
+  // ── Web Push: (re)subscribe when permission is granted, keep the server copy of the reminders in sync ──
+  useEffect(() => {
+    if (!notificationsEnabled || !pushSupported() || Notification.permission !== 'granted') return;
+    const t = setTimeout(() => {
+      void enablePush(remindersRef.current);
+    }, 800);
+    return () => clearTimeout(t);
+  }, [notificationsEnabled, reminders]);
+
+  useEffect(() => {
+    const onPerm = () => {
+      if (notificationsEnabled) void enablePush(remindersRef.current);
+    };
+    window.addEventListener('docmind:permission-changed', onPerm);
+    return () => window.removeEventListener('docmind:permission-changed', onPerm);
+  }, [notificationsEnabled]);
+
+  // ── Notification action buttons (Snooze / Mark done) coming from the service worker ──
+  useEffect(() => {
+    const apply = (action: string, id: string) => {
+      if (!id) return;
+      if (action === 'snooze') handleSnoozeRef.current(id, 1);
+      if (action === 'done') handleMarkDoneRef.current(id);
+      if (action === 'open') {
+        const found = remindersRef.current.find((r) => r.id === id);
+        if (found) setSelectedDetailReminder(found);
+      }
+    };
+    const onMsg = (e: MessageEvent) => {
+      if (e.data && e.data.type === 'docmind-notification-action') apply(e.data.action, e.data.reminderId);
+    };
+    navigator.serviceWorker?.addEventListener('message', onMsg);
+    // App was closed when the button was tapped: the SW opened us with ?dm_action=...&dm_id=...
+    const params = new URLSearchParams(window.location.search);
+    const a = params.get('dm_action');
+    const id = params.get('dm_id');
+    if (a && id) {
+      apply(a, id);
+      params.delete('dm_action');
+      params.delete('dm_id');
+      const qs = params.toString();
+      window.history.replaceState({}, '', window.location.pathname + (qs ? `?${qs}` : ''));
+    }
+    return () => navigator.serviceWorker?.removeEventListener('message', onMsg);
+  }, []);
 
   useEffect(() => {
     localStorage.setItem('docreminder_profile', JSON.stringify({ ...userProfile, securitySettings }));
@@ -313,6 +443,13 @@ export default function App() {
     );
   };
 
+  /** Idempotent "mark done" (used by notification actions; unlike the toggle it never re-opens a finished reminder). */
+  const handleMarkDone = (id: string) => {
+    const target = remindersRef.current.find((r) => r.id === id);
+    if (!target || target.isCompleted) return;
+    handleToggleComplete(id);
+  };
+
   const handleDeleteReminder = (id: string) => {
     setReminders((prev) => prev.filter((r) => r.id !== id));
     showToast('Reminder deleted');
@@ -359,6 +496,13 @@ export default function App() {
     }
     showToast('Encrypted backup restored successfully!');
   };
+
+  const showToastRef = useRef(showToast);
+  showToastRef.current = showToast;
+  const handleSnoozeRef = useRef(handleSnoozeAlert);
+  handleSnoozeRef.current = handleSnoozeAlert;
+  const handleMarkDoneRef = useRef(handleMarkDone);
+  handleMarkDoneRef.current = handleMarkDone;
 
   return (
     <div className="min-h-screen bg-[#f8fafb] dark:bg-[#07131e] text-[#191c1d] dark:text-sky-100 font-sans antialiased selection:bg-[#e0f2fe] selection:text-[#0369a1] transition-colors duration-200">

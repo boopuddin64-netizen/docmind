@@ -1,4 +1,5 @@
 import { Reminder } from '../types';
+import { calendarDaysUntil, parseDateParts } from './schedule';
 
 export interface PendingAlert {
   reminderId: string;
@@ -9,6 +10,13 @@ export interface PendingAlert {
   daysRemaining: number;
   severity: 'urgent' | 'warning' | 'info';
   message: string;
+}
+
+export type PermissionState = 'unsupported' | 'default' | 'granted' | 'denied';
+
+export function getPermissionState(): PermissionState {
+  if (typeof window === 'undefined' || !('Notification' in window)) return 'unsupported';
+  return Notification.permission as PermissionState;
 }
 
 /**
@@ -23,27 +31,16 @@ export async function requestNotificationPermission(): Promise<boolean> {
     return true;
   }
   if (Notification.permission !== 'denied') {
-    const permission = await Notification.requestPermission();
-    return permission === 'granted';
-  }
-  return false;
-}
-
-/**
- * Parses date string in DD/MM/YYYY into JS Date object
- */
-function parseDDMMYYYY(dateStr: string): Date | null {
-  if (!dateStr) return null;
-  const parts = dateStr.split(/[\/\.-]/);
-  if (parts.length === 3) {
-    const day = parseInt(parts[0], 10);
-    const month = parseInt(parts[1], 10) - 1;
-    const year = parseInt(parts[2], 10);
-    if (!isNaN(day) && !isNaN(month) && !isNaN(year)) {
-      return new Date(year, month, day);
+    try {
+      const permission = await Notification.requestPermission();
+      // Let the app react (e.g. subscribe to Web Push) no matter which button triggered the prompt.
+      window.dispatchEvent(new CustomEvent('docmind:permission-changed', { detail: permission }));
+      return permission === 'granted';
+    } catch {
+      return false;
     }
   }
-  return null;
+  return false;
 }
 
 /**
@@ -51,8 +48,7 @@ function parseDDMMYYYY(dateStr: string): Date | null {
  */
 export function checkUpcomingAlerts(reminders: Reminder[]): PendingAlert[] {
   const alerts: PendingAlert[] = [];
-  const today = new Date();
-  today.setHours(0, 0, 0, 0);
+  const now = new Date();
 
   for (const item of reminders) {
     if (item.isCompleted) continue;
@@ -60,17 +56,16 @@ export function checkUpcomingAlerts(reminders: Reminder[]): PendingAlert[] {
     // Check if snoozed
     if (item.notificationSchedule?.snoozedUntil) {
       const snoozedDate = new Date(item.notificationSchedule.snoozedUntil);
-      if (snoozedDate > new Date()) {
+      if (snoozedDate.getTime() > Date.now()) {
         continue; // Skip snoozed alerts
       }
     }
 
-    const dueDate = parseDDMMYYYY(item.appointmentDate);
-    if (!dueDate) continue;
+    const dueParts = parseDateParts(item.appointmentDate);
+    if (!dueParts) continue;
 
-    dueDate.setHours(0, 0, 0, 0);
-    const diffTime = dueDate.getTime() - today.getTime();
-    const daysRemaining = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
+    // Calendar-day difference (DST-safe; also understands both DD/MM/YYYY and YYYY-MM-DD).
+    const daysRemaining = calendarDaysUntil(dueParts, now);
 
     if (daysRemaining < 0) {
       alerts.push({
@@ -123,19 +118,43 @@ export function checkUpcomingAlerts(reminders: Reminder[]): PendingAlert[] {
 }
 
 /**
- * Dispatches a native browser notification or audio alert chime
+ * Shows a system notification. Prefers ServiceWorkerRegistration.showNotification (the only API that works on
+ * Android Chrome, where `new Notification()` throws) and falls back to the constructor.
+ * Resolves true when a notification was handed to the browser.
  */
-export function dispatchNativeNotification(title: string, body: string, iconUrl?: string) {
-  if ('Notification' in window && Notification.permission === 'granted') {
-    try {
-      new Notification(title, {
-        body,
-        icon: iconUrl || '/docmind_app_icon.jpg',
-        badge: '/icon-192.jpg',
-        tag: 'docmind-alert',
-      });
-    } catch (e) {
-      console.warn('Native notification spawn failed:', e);
+export async function dispatchNativeNotification(
+  title: string,
+  body: string,
+  iconUrl?: string,
+  tag: string = 'docmind-alert',
+  reminderId?: string,
+): Promise<boolean> {
+  if (typeof window === 'undefined' || !('Notification' in window) || Notification.permission !== 'granted') return false;
+  const options: NotificationOptions & { renotify?: boolean } = {
+    body,
+    // Reminders must not vanish on their own (desktop Chrome auto-closes plain notifications after a few seconds).
+    requireInteraction: tag !== 'docmind-test',
+    icon: iconUrl || '/icon-192.png',
+    badge: '/favicon.png',
+    tag,
+    data: { reminderId: reminderId || '', url: '/' },
+  };
+  try {
+    if ('serviceWorker' in navigator) {
+      const reg = await navigator.serviceWorker.getRegistration();
+      if (reg && reg.active) {
+        await reg.showNotification(title, options);
+        return true;
+      }
     }
+  } catch (e) {
+    console.warn('Service worker notification failed, falling back:', e);
+  }
+  try {
+    new Notification(title, options);
+    return true;
+  } catch (e) {
+    console.warn('Native notification spawn failed:', e);
+    return false;
   }
 }

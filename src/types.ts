@@ -62,6 +62,8 @@ export interface Reminder {
     oneDayBefore?: boolean;
     dayOfEvent?: boolean;
     snoozedUntil?: string | null;
+    /** Minutes before the due time to send a heads-up (default 60, 0 = none). */
+    leadMinutes?: number;
   };
 }
 
