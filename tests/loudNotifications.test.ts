@@ -299,9 +299,9 @@ test('sw: the event is marked delivered only AFTER the notification was shown; a
   assert.deepEqual(sw2.cacheWrites, []);
 });
 
-test('sw: cache name is v8 (one above the base branch v7)', async () => {
+test('sw: cache name is v9 (one above v8)', async () => {
   const sw = await loadSw();
-  assert.equal(sw.cacheName, 'docmind-pwa-v8');
+  assert.equal(sw.cacheName, 'docmind-pwa-v9');
   assert.match(sw.src, /"\/badge-96\.png"/, 'badge is precached');
 });
 

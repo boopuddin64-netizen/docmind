@@ -16,7 +16,7 @@ import {
 } from 'lucide-react';
 import { Reminder, ReminderCategory, UserProfile } from '../types';
 import { SwipeableReminderCard } from './SwipeableReminderCard';
-import { exportIcsCalendar } from '../lib/icalHelper';
+import { CalendarExportSheet } from './CalendarExportSheet';
 
 interface AllRemindersScreenProps {
   reminders: Reminder[];
@@ -194,12 +194,11 @@ export const AllRemindersScreen: React.FC<AllRemindersScreenProps> = ({
     return matchedCount === terms.length || (terms.length >= 3 && matchedCount >= Math.ceil(terms.length * 0.75));
   });
 
-  const exportCalendar = async (rem: Reminder) => {
-    const r = await exportIcsCalendar(rem);
-    onShowToast?.(r.message);
-  };
+  const [exportTarget, setExportTarget] = React.useState<Reminder | null>(null);
+  const exportCalendar = (rem: Reminder) => setExportTarget(rem);
 
   return (
+    <>
     <div className="flex flex-col min-h-screen bg-[#f8fafb] dark:bg-[#07131e] pb-36 px-4 sm:px-6 pt-4">
       {/* Top Title & Quick Add Header */}
       <div className="flex items-center justify-between mb-4">
@@ -363,5 +362,7 @@ export const AllRemindersScreen: React.FC<AllRemindersScreenProps> = ({
         )}
       </div>
     </div>
+    <CalendarExportSheet reminder={exportTarget} onClose={() => setExportTarget(null)} onShowToast={onShowToast} />
+    </>
   );
 };

@@ -91,7 +91,46 @@ export function parseIcsTime(input: string | undefined): { h: number; min: numbe
 }
 
 const fmtDate = (dt: Date) => `${pad(dt.getUTCFullYear(), 4)}${pad(dt.getUTCMonth() + 1)}${pad(dt.getUTCDate())}`;
-const fmtLocal = (dt: Date) => `${fmtDate(dt)}T${pad(dt.getUTCHours())}${pad(dt.getUTCMinutes())}00`;
+const fmtYmd = (t: { y: number; m: number; d: number }) => `${pad(t.y, 4)}${pad(t.m)}${pad(t.d)}`;
+
+export interface LocalDateTime { y: number; m: number; d: number; h: number; min: number }
+
+export interface ResolvedEventWindow {
+  allDay: boolean;
+  /** All-day: h/min are 0. */
+  start: LocalDateTime;
+  /** Timed: start + 1 hour (wall clock). All-day: the EXCLUSIVE next day at 00:00 (same as DTEND;VALUE=DATE). */
+  end: LocalDateTime;
+}
+
+const HOUR_MS = 60 * 60 * 1000;
+
+function fromUtcFields(dt: Date): LocalDateTime {
+  return { y: dt.getUTCFullYear(), m: dt.getUTCMonth() + 1, d: dt.getUTCDate(), h: dt.getUTCHours(), min: dt.getUTCMinutes() };
+}
+
+/**
+ * Single source of truth for WHEN an event happens, used by the .ics builder AND the Google / Outlook deep links
+ * so all of them always agree (same parser, same all-day rule, same 1 hour default duration).
+ * Date arithmetic is done in UTC so the end rolls over month / year boundaries (31 Dec 23:30 -> 1 Jan 00:30).
+ */
+export function resolveEventWindow(dateInput: string | undefined, timeInput: string | undefined, fallbackNow: Date = new Date()): ResolvedEventWindow {
+  const { y, m, d } = parseIcsDate(dateInput, fallbackNow);
+  const time = parseTimeOrNull(timeInput);
+  if (time === null) {
+    const start = new Date(Date.UTC(y, m - 1, d));
+    return { allDay: true, start: fromUtcFields(start), end: fromUtcFields(new Date(start.getTime() + 24 * HOUR_MS)) };
+  }
+  const start = new Date(Date.UTC(y, m - 1, d, time.h, time.min));
+  return { allDay: false, start: fromUtcFields(start), end: fromUtcFields(new Date(start.getTime() + HOUR_MS)) };
+}
+
+/** Human description shared by every export target. */
+export function buildEventDescription(note?: string, recipient?: string): string {
+  const n = (note || '').trim();
+  const r = (recipient || '').trim();
+  return [n, r ? `(For: ${r})` : '', '- DocuMind Reminder'].filter(Boolean).join(' ');
+}
 
 export function buildIcsContent(input: IcsInput): string {
   const now = input.now ?? new Date();
@@ -100,12 +139,11 @@ export function buildIcsContent(input: IcsInput): string {
   const location = (input.location || '').trim();
   const recipient = (input.recipient || '').trim();
 
-  const { y, m, d } = parseIcsDate(input.date, now);
-  const time = parseTimeOrNull(input.time);
-  const allDay = time === null;
+  const win = resolveEventWindow(input.date, input.time, now);
+  const allDay = win.allDay;
 
   const dtStamp = `${fmtDate(now)}T${pad(now.getUTCHours())}${pad(now.getUTCMinutes())}${pad(now.getUTCSeconds())}Z`;
-  const description = [note, recipient ? `(For: ${recipient})` : '', '- DocuMind Reminder'].filter(Boolean).join(' ');
+  const description = buildEventDescription(note, recipient);
   const safeUid = (input.uid || '').replace(/[^A-Za-z0-9._-]/g, '').slice(0, 80);
   const uid = safeUid ? `docmind-${safeUid}@docmind.app` : `docmind-${now.getTime()}-${Math.floor(Math.random() * 100000)}@docmind.app`;
 
@@ -114,13 +152,9 @@ export function buildIcsContent(input: IcsInput): string {
   // Date arithmetic is done in UTC so the end rolls over month / year boundaries correctly
   // (31 Dec 23:30 -> 1 Jan 00:30); the values are written as floating local times (no Z).
   if (allDay) {
-    const start = new Date(Date.UTC(y, m - 1, d));
-    const end = new Date(start.getTime() + 24 * 60 * 60 * 1000); // DTEND is exclusive for all-day events
-    lines.push(`DTSTART;VALUE=DATE:${fmtDate(start)}`, `DTEND;VALUE=DATE:${fmtDate(end)}`);
+    lines.push(`DTSTART;VALUE=DATE:${fmtYmd(win.start)}`, `DTEND;VALUE=DATE:${fmtYmd(win.end)}`); // DTEND is exclusive for all-day events
   } else {
-    const start = new Date(Date.UTC(y, m - 1, d, time.h, time.min));
-    const end = new Date(start.getTime() + 60 * 60 * 1000);
-    lines.push(`DTSTART:${fmtLocal(start)}`, `DTEND:${fmtLocal(end)}`);
+    lines.push(`DTSTART:${fmtYmd(win.start)}T${pad(win.start.h)}${pad(win.start.min)}00`, `DTEND:${fmtYmd(win.end)}T${pad(win.end.h)}${pad(win.end.min)}00`);
   }
   lines.push(`SUMMARY:${escapeIcsText(title)}`, `DESCRIPTION:${escapeIcsText(description)}`);
   if (location) lines.push(`LOCATION:${escapeIcsText(location)}`);

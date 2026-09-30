@@ -217,3 +217,16 @@ test('HTTP: /api/preprocess no longer leaks exception text', async () => {
     assert.equal(r.status, 200);
   });
 });
+
+test('HTTP: /api/download-ics carries the reminder alert and stable uid (Apple Calendar link)', async () => {
+  await withServer(createApiApp(pushDeps()), async (base) => {
+    const r = await fetch(`${base}/api/download-ics?title=Dentist&date=15%2F11%2F2026&time=09%3A30%20AM&alarm=30&uid=r1`);
+    assert.equal(r.status, 200);
+    assert.match(r.headers.get('content-type') || '', /^text\/calendar/);
+    assert.match(r.headers.get('content-disposition') || '', /^inline/);
+    const body = await r.text();
+    assert.match(body, /UID:docmind-r1@docmind\.app/);
+    assert.match(body, /TRIGGER:-PT30M/);
+    assert.match(body, /DTSTART:20261115T093000/);
+  });
+});
