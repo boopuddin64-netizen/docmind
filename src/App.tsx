@@ -554,10 +554,10 @@ export default function App() {
         <div
           role="status"
           aria-live="polite"
-          className="fixed top-16 left-1/2 -translate-x-1/2 z-[60] max-w-[92vw] bg-[#0284c7] text-white pl-5 pr-3 py-2.5 rounded-full shadow-xl text-xs font-bold flex items-center gap-2 animate-in slide-in-from-top-4 duration-200 border border-[#bae6fd]"
+          className="fixed top-16 left-1/2 -translate-x-1/2 z-[60] max-w-[92vw] sm:max-w-md bg-[#0284c7] text-white pl-5 pr-3 py-2.5 rounded-3xl shadow-xl text-xs font-bold flex items-center gap-2 animate-in slide-in-from-top-4 duration-200 border border-[#bae6fd]"
         >
           <BellRing className="w-4 h-4 text-[#bae6fd] shrink-0" />
-          <span className="truncate">{toast.message}</span>
+          <span className="line-clamp-4 whitespace-normal text-left">{toast.message}</span>
           {toast.actionLabel && toast.onAction && (
             <button
               type="button"
@@ -661,6 +661,7 @@ export default function App() {
         onClose={() => setIsUploadModalOpen(false)}
         onExtracted={(data) => handleExtractedDoc(data)}
         onAddManually={() => setIsAddManualOpen(true)}
+        onNotice={(msg) => showToast(msg, { durationMs: 9000 })}
         userProfile={userProfile}
       />
 

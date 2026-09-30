@@ -38,7 +38,7 @@ test('scan validation: rejects wrong types / shapes with 400', () => {
     { documentText: 'x', familyMembers: [null] }, { documentText: 'x', familyMembers: [{}] },
     { imageBase64: 5 }, { imageBase64: '!!!not base64!!!' }, { imageBase64: JPEG_B64, mimeType: 5 },
     { imageBase64: JPEG_B64, mimeType: 'text/html' }, { imageBase64: JPEG_B64, mimeType: 'image/png' /* bytes are a JPEG */ },
-    { documentText: 'x'.repeat(20_001) }, { documentText: 'x', userName: 'n'.repeat(201) },
+    { documentText: 'x'.repeat(60_001) }, { documentText: 'x', userName: 'n'.repeat(201) },
   ];
   for (const b of bad) {
     const r = validateScanRequest(b);

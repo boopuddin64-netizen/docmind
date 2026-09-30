@@ -48,8 +48,8 @@ export class ScanError extends Error {
 }
 
 const FRIENDLY_BY_STATUS: Record<number, string> = {
-  400: 'We could not read that file. Please try a clear photo of the document.',
-  413: 'That image is too large to upload. Try a smaller photo or crop it.',
+  400: 'We could not read that file. Please try a clear photo, PDF or document.',
+  413: 'That file is too large to upload (limit about 3 MB). Try a smaller file, or a smaller photo.',
   429: 'Too many scans in a short time. Please wait a few minutes and try again.',
   503: 'Document scanning is not available right now.',
 };
