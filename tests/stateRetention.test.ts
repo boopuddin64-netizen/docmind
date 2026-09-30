@@ -256,7 +256,7 @@ test('service worker: install does NOT skipWaiting; only a SKIP_WAITING message 
   assert.equal(skipped, 0);
   listeners.message({ data: { type: 'SKIP_WAITING' } });
   assert.equal(skipped, 1);
-  assert.match(src, /docmind-pwa-v10/);
+  assert.match(src, /docmind-pwa-v11/);
 });
 
 test('update checks are throttled and tolerate a clock that moved backwards', () => {

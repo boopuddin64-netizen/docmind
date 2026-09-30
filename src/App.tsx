@@ -19,6 +19,7 @@ import { Header } from './components/Header';
 import { UpdateBanner } from './components/UpdateBanner';
 import { announceRefreshAvailable, refreshApp } from './lib/swRegister';
 import { browserFreshnessDeps, installSessionFreshness } from './lib/sessionFreshness';
+import { isScanInFlight } from './lib/scanActivity';
 import { clearDraft, clearDrafts, flushPendingWrites, hasLiveDrafts, isDefaultSnapshot, persistableDoc, readSnapshot, writeSnapshot, type UiSnapshot } from './lib/persistedState';
 import { useFlushOnHide, useScrollMemory } from './lib/useUiState';
 import {
@@ -244,7 +245,7 @@ export default function App() {
   const saveUiStateRef = useRef(saveUiState);
   saveUiStateRef.current = saveUiState;
   useEffect(() => installSessionFreshness(browserFreshnessDeps({
-    isBusy: () => busyRef.current || hasLiveDrafts(),
+    isBusy: () => busyRef.current || isScanInFlight() || hasLiveDrafts(),
     saveState: () => saveUiStateRef.current(),
     refresh: refreshApp,
     defer: announceRefreshAvailable,

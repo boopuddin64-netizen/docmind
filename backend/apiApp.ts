@@ -14,6 +14,7 @@ import { validateScanRequest } from "./scanValidation.js";
 import { extractDocumentText, DocumentExtractionError } from "./documentText.js";
 import { kindOfMime } from "../src/lib/uploadFormats.js";
 import { toDdMmYyyy } from "../src/lib/dateInput.js";
+import { generateWithFallback, GeminiCallError, type GeminiRetryOptions } from "./geminiCall.js";
 import type { PushDeps } from "../push-server/core.js";
 
 // Initialize Gemini Client server-side
@@ -31,11 +32,13 @@ const getGeminiClient = () => {
 };
 
 export interface ApiAppOptions {
-  /** /api/scan-document limiter (per IP). Default: 20 requests / 10 minutes. */
+  /** /api/scan-document limiter (per IP). Default: 40 requests / 10 minutes. */
   scanRateLimit?: { windowMs: number; max: number };
   /** Test seam: supplies the Gemini client (return null = not configured). Defaults to the env-configured client. */
   getAi?: () => Pick<GoogleGenAI, "models"> | null;
   now?: () => number;
+  /** Test seam: retry / fallback tuning for the model call (models, budget, sleep ...). */
+  geminiRetry?: GeminiRetryOptions;
 }
 
 /**
@@ -43,6 +46,8 @@ export interface ApiAppOptions {
  * 60,000 chars, so real requests stay well below this; Vercel itself rejects bodies above 4.5 MB.
  */
 const JSON_BODY_LIMIT = 4_500_000;
+/** Scans per IP per 10 minutes. Roomy enough for automatic retries and several documents in a row. */
+export const SCAN_RATE_LIMIT_MAX = 40;
 
 export function createApiApp(pushDeps?: PushDeps, opts: ApiAppOptions = {}) {
   const router = express();
@@ -50,7 +55,7 @@ export function createApiApp(pushDeps?: PushDeps, opts: ApiAppOptions = {}) {
 
   const scanLimiter = createRateLimiter({
     windowMs: opts.scanRateLimit?.windowMs ?? 10 * 60_000,
-    max: opts.scanRateLimit?.max ?? 20,
+    max: opts.scanRateLimit?.max ?? SCAN_RATE_LIMIT_MAX,
     now: opts.now,
   });
 
@@ -190,8 +195,7 @@ Document text/filename context: ${promptContext.trim() || "Scan image provided"}
 
         parts.push({ text: promptText });
 
-        const response = await ai.models.generateContent({
-          model: "gemini-3.6-flash",
+        const { data: parsedData, model: usedModel, attempts } = await generateWithFallback(ai as any, {
           contents: { parts },
           config: {
             temperature: 0, // Zero temperature for rigid, deterministic extraction
@@ -252,10 +256,14 @@ Document text/filename context: ${promptContext.trim() || "Scan image provided"}
               ],
             },
           },
+        }, {
+          ...opts.geminiRetry,
+          onAttemptFailed: (info) => {
+            console.warn(`scan-document: model attempt failed model=${info.model} kind=${info.kind} status=${info.status ?? "-"} attempt=${info.attempt}`);
+            opts.geminiRetry?.onAttemptFailed?.(info);
+          },
         });
-
-        const parsedData = JSON.parse(response.text || "{}");
-        if (!parsedData || typeof parsedData !== "object") throw new Error("Scan model returned a non-object result");
+        if (attempts > 1) console.warn(`scan-document: succeeded with model=${usedModel} after ${attempts} attempts`);
         
         function normalizePatientName(rawPatientName?: string, itemText?: string, userNameVal?: string, registeredList: string[] = []): { name: string; match: string } | null {
           const pName = (rawPatientName || "").trim();
@@ -368,7 +376,15 @@ Document text/filename context: ${promptContext.trim() || "Scan image provided"}
         });
       } catch (geminiError) {
         // Details stay in the server log; the client only gets a generic message.
-        console.error("Gemini scan error:", geminiError);
+        console.error("Gemini scan error:", geminiError instanceof GeminiCallError ? `${geminiError.message} (last status ${geminiError.lastStatus ?? "-"})` : geminiError);
+        if (geminiError instanceof GeminiCallError && geminiError.failure === "busy") {
+          // Capacity / quota problem on the AI side (not the user's connection, not their document): clearly retryable.
+          res.setHeader("Retry-After", "10");
+          return res.status(503).json({ success: false, code: "SCAN_BUSY", error: "The scanning service is busy right now. Please try again in a moment." });
+        }
+        if (geminiError instanceof GeminiCallError && geminiError.failure === "auth") {
+          return res.status(503).json({ success: false, code: "SCAN_UNAVAILABLE", error: "Document scanning is not available right now. Please add the reminder manually." });
+        }
         return res.status(502).json({ success: false, code: "SCAN_FAILED", error: "We could not read this document. Please try again or add the reminder manually." });
       }
     } catch (err) {

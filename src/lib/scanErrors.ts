@@ -9,10 +9,11 @@
  *  - a lazy chunk (pdf.js / mammoth / SheetJS) could not be downloaded                -> network / chunk
  *  - HTTP 408, or a 5xx / 200 whose body is NOT our JSON envelope (Vercel/proxy/captive-portal HTML or text) -> network / upstream
  *  - our JSON envelope ({ success:false, code?, error }) is the app talking, so it is NOT a network problem:
- *      413 -> too-large, 429 -> rate-limited, 400/422 -> unsupported, 503 SCAN_UNAVAILABLE -> unavailable, other -> ai
+ *      413 -> too-large, 429 -> rate-limited, 400/422 -> unsupported, 503 SCAN_UNAVAILABLE -> unavailable,
+ *      503 SCAN_BUSY (AI capacity / quota, already retried with fallback models on the server) -> busy, other -> ai
  */
 
-export type ScanFailureKind = 'network' | 'too-large' | 'unsupported' | 'rate-limited' | 'unavailable' | 'ai' | 'unknown';
+export type ScanFailureKind = 'network' | 'too-large' | 'unsupported' | 'rate-limited' | 'unavailable' | 'busy' | 'ai' | 'unknown';
 export type NetworkReason = 'offline' | 'fetch' | 'timeout' | 'chunk' | 'upstream';
 
 export const NETWORK_MESSAGE = 'Network problem while reading your document. Check your connection and try again.';
@@ -95,7 +96,7 @@ export function classifyScanFailure(e: unknown, opts: { online?: boolean } = {})
       kind: e.kind,
       message: e.kind === 'network' ? networkMessage(reason!) : e.message,
       reason,
-      retryable: e.kind === 'network' || e.kind === 'ai' || e.kind === 'unknown' || e.kind === 'rate-limited',
+      retryable: e.kind === 'network' || e.kind === 'ai' || e.kind === 'unknown' || e.kind === 'rate-limited' || e.kind === 'busy',
     };
   }
   if (isAbortOrTimeout(e)) return net(online ? 'timeout' : 'offline');
@@ -153,6 +154,7 @@ export async function readScanResponse(response: ResponseLike): Promise<any> {
     const serverMsg = typeof body?.error === 'string' ? body.error : '';
     const code = typeof body?.code === 'string' ? body.code : '';
     const message = serverMsg || FRIENDLY_BY_STATUS[response.status] || GENERIC_MESSAGE;
+    if (code === 'SCAN_BUSY') throw new ScanError(message, response.status, 'busy');
     if (code === 'SCAN_UNAVAILABLE' || response.status === 503) throw new ScanError(message, response.status, 'unavailable');
     if (response.status === 400 || response.status === 422 || code === 'UNREADABLE_DOCUMENT') throw new ScanError(message, response.status, 'unsupported');
     throw new ScanError(message, response.status, 'ai');
@@ -173,6 +175,24 @@ export interface ScanRequestOptions {
   timeoutMs?: number;
   /** Injectable for tests; defaults to navigator.onLine. */
   isOnline?: () => boolean;
+  /** Automatic extra attempts after a transient failure (default 1). */
+  retries?: number;
+  /** Pause before an automatic retry (default 2.5 s). */
+  retryDelayMs?: number;
+  sleep?: (ms: number) => Promise<void>;
+}
+
+/**
+ * Transient failures worth one more automatic try: the AI service being busy, a gateway/5xx blip, a dropped connection (iOS
+ * suspends in-flight requests when the app is backgrounded for a moment) or a 5xx from the scan route. NOT retried: offline
+ * (no point), our own request timeout (the server already spent its whole budget), rate limits, bad/too-large/unreadable files.
+ */
+export function isTransientScanError(e: unknown): boolean {
+  if (!(e instanceof ScanError)) return false;
+  if (e.kind === 'busy') return true;
+  if (e.kind === 'network') return e.reason === 'upstream' || e.reason === 'fetch';
+  if (e.kind === 'ai') return e.status !== undefined && e.status >= 500;
+  return false;
 }
 
 function browserOnline(): boolean {
@@ -185,6 +205,19 @@ function browserOnline(): boolean {
  * Throws ScanError only (never a raw TypeError / AbortError / SyntaxError).
  */
 export async function requestScan(body: unknown, opts: ScanRequestOptions = {}): Promise<any> {
+  const retries = Math.max(0, opts.retries ?? 1);
+  const sleep = opts.sleep ?? ((ms: number) => new Promise<void>((r) => setTimeout(r, ms)));
+  for (let attempt = 0; ; attempt++) {
+    try {
+      return await requestScanOnce(body, opts);
+    } catch (e) {
+      if (attempt >= retries || !isTransientScanError(e)) throw e;
+      await sleep(opts.retryDelayMs ?? 2500);
+    }
+  }
+}
+
+async function requestScanOnce(body: unknown, opts: ScanRequestOptions): Promise<any> {
   const isOnline = opts.isOnline ?? browserOnline;
   if (!isOnline()) throw networkError('offline'); // up front: no request, no waiting
   const doFetch = opts.fetchImpl ?? fetch;
