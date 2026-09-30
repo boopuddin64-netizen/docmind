@@ -94,7 +94,7 @@ for (const minutes of EXPECTED) {
     assert.equal(sent.length, before + 1, 'exactly one wake-up push');
     const wake = sent[sent.length - 1];
     assert.equal(wake.payload.reminderId, 'r1');
-    assert.equal(wake.payload.body, 'Snoozed reminder is due now');
+    assert.match(wake.payload.body, /^Due: .*\nSnoozed reminder$/);
     assert.equal(wake.opts.urgency, 'high');
     assert.ok(wake.opts.ttl >= 3600);
 
@@ -124,5 +124,5 @@ test('re-fire: the open app also alerts again once the snooze ends (in-page sche
   assert.equal(planAlerts(snoozed, fired, t0 + 29 * MIN).notifications.length, 0);
   const after = planAlerts(snoozed, fired, t0 + 31 * MIN);
   assert.equal(after.notifications.length, 1);
-  assert.equal(after.notifications[0].body, 'Snoozed reminder is due now');
+  assert.match(after.notifications[0].body, /^Due: .*\nSnoozed reminder$/);
 });

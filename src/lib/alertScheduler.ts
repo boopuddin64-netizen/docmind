@@ -2,6 +2,7 @@
  * In-page alert scheduler (runs while the app is open, and on every start-up to catch missed alerts).
  * The pure planning function is unit-tested; the DOM glue lives in notifications.ts / App.tsx.
  */
+import { truncateText } from './notificationText';
 import { buildSyncPayload, describeEvent, eligibleEvents } from './schedule';
 import type { Reminder } from '../types';
 
@@ -48,7 +49,7 @@ export function planAlerts(reminders: Reminder[], fired: FiredMap, now: number):
       {
         tag: 'docmind-summary',
         title: `${events.length} reminders need your attention`,
-        body: events.slice(0, 3).map((e) => e.reminder.title).join(', ') + (events.length > 3 ? '…' : ''),
+        body: events.slice(0, 3).map((e) => `• ${truncateText(e.reminder.title, 60)}`).join('\n') + (events.length > 3 ? `\n+${events.length - 3} more` : ''),
       },
     ];
   } else {

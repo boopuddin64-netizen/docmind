@@ -26,6 +26,7 @@ import {
 import { INITIAL_REMINDERS, INITIAL_USER_PROFILE } from './data/mockData';
 import { sanitizeAndValidateDocData } from './lib/sanitizer';
 import { checkForDuplicateReminder, generateCompositeDedupHash } from './lib/deduplication';
+import { formatTestNotification } from './lib/notificationText';
 import { checkUpcomingAlerts, closeNotificationsByTag, dispatchNativeNotification, requestNotificationPermission } from './lib/notifications';
 import { FIRED_STORAGE_KEY, loadPushFiredKeys, nextEventDelay, planAlerts, type FiredMap } from './lib/alertScheduler';
 import { disablePush, enablePush, isPushActive, pushSupported, sendTestPush } from './lib/pushClient';
@@ -132,8 +133,8 @@ export default function App() {
     const granted = await requestNotificationPermission();
     if (granted) {
       void dispatchNativeNotification(
-        'DocuMind Device Pop-Up Alert Test',
-        'Device notification pop-up system working successfully on this device!',
+        formatTestNotification(Date.now()).title,
+        formatTestNotification(Date.now()).body,
         undefined,
         'docmind-test'
       );

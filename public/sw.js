@@ -101,6 +101,26 @@ const VIBRATE_PATTERN = [300, 150, 300, 150, 600];
 const ICON = "/icon-192.png";
 const BADGE = "/badge-96.png";
 
+// Display-side safety net (the server already formats: title = "[Category: ]reminder title", body = 2-3 short lines such as
+// "Due: Thu, 15 Oct 2026 at 9:30 AM (in 1 hour)" + key detail). Here we only strip control characters, keep at most
+// 3 lines and cut over-long text on a character boundary with an ellipsis so a bad payload can never flood the tray.
+// Keep in step with cleanText / truncateText in src/lib/notificationText.ts.
+function clipLine(text, max) {
+  const chars = Array.from(String(text).replace(/[\u0000-\u001f\u007f-\u009f\u200b-\u200f\u202a-\u202e\u2066-\u2069\ufeff]/g, " ").replace(/\s+/g, " ").trim());
+  return chars.length <= max ? chars.join("") : chars.slice(0, max - 1).join("").trimEnd() + "\u2026";
+}
+function clipTitle(text) {
+  return clipLine(text, 80);
+}
+function clipBody(text) {
+  return String(text)
+    .split(/\r\n|\r|\n/)
+    .map((l) => clipLine(l, 90))
+    .filter(Boolean)
+    .slice(0, 3)
+    .join("\n");
+}
+
 self.addEventListener("push", (event) => {
   let data = {};
   try {
@@ -109,8 +129,8 @@ self.addEventListener("push", (event) => {
     data = { title: "DocuMind reminder", body: event.data ? event.data.text() : "" };
   }
   if (!data || typeof data !== "object") data = {};
-  const title = (typeof data.title === "string" && data.title.trim()) || "DocuMind reminder";
-  const body = (typeof data.body === "string" && data.body.trim()) || "You have a reminder due. Open DocuMind for details.";
+  const title = (typeof data.title === "string" && clipTitle(data.title)) || "DocuMind reminder";
+  const body = (typeof data.body === "string" && clipBody(data.body)) || "You have a reminder due. Open DocuMind for details.";
   const reminderId = typeof data.reminderId === "string" ? data.reminderId : "";
   const isTest = data.test === true;
   const options = {

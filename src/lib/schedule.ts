@@ -5,6 +5,8 @@
  * exactly the same "when does this reminder need to notify" answer, with the same de-dupe keys.
  */
 
+import { buildNotificationDetail, categoryLabel, formatNotification, truncateText, MAX_DETAIL_CHARS } from './notificationText.js';
+
 export const DEFAULT_LEAD_MINUTES = 60;
 export const MAX_LEAD_MINUTES = 7 * 24 * 60;
 
@@ -20,6 +22,12 @@ export interface SyncedReminder {
   leadMinutes: number;
   /** Epoch ms until which alerts are snoozed. */
   snoozedUntil?: number | null;
+  /** Short category label for the notification title prefix (e.g. "Bill"). Optional. */
+  category?: string;
+  /** Key detail lines for the notification body (amount / issuer / short description), newline separated. Optional. */
+  detail?: string;
+  /** True when the reminder has no usable time (date-only notification text). Omitted when false. */
+  allDay?: boolean;
 }
 
 export interface ScheduledEvent {
@@ -169,15 +177,12 @@ export function formatClock(ms: number, tzOffsetMinutes?: number): string {
   return `${String(h12).padStart(2, '0')}:${String(m).padStart(2, '0')} ${h >= 12 ? 'PM' : 'AM'}`;
 }
 
-/** Human text for a notification. Kept generic; the caller decides how much to show. */
-export function describeEvent(ev: ScheduledEvent, now: number): { title: string; body: string } {
-  const title = ev.reminder.title || 'Reminder';
-  if (ev.stage === 'lead') {
-    const mins = Math.max(1, Math.round((ev.reminder.dueAt - now) / 60_000));
-    return { title, body: mins >= 60 ? `Due in about ${Math.round(mins / 60)} hour(s)` : `Due in ${mins} minute(s)` };
-  }
-  if (ev.stage === 'snooze') return { title, body: 'Snoozed reminder is due now' };
-  return { title, body: 'Due now' };
+/**
+ * Human text for a notification (see notificationText.ts for the format). `tzOffsetMinutes` (getTimezoneOffset sign) is the
+ * user's zone as stored by the push server; omit it in the browser to use the device's own zone.
+ */
+export function describeEvent(ev: ScheduledEvent, now: number, tzOffsetMinutes?: number): { title: string; body: string } {
+  return formatNotification(ev.reminder, ev.stage, now, tzOffsetMinutes);
 }
 
 /** Builds the (minimal) list synced to the push server from the app's reminders. Completed/invalid/very old ones are dropped. */
@@ -187,6 +192,11 @@ export function buildSyncPayload(
     eventTitle: string;
     appointmentDate: string;
     appointmentTime: string;
+    category?: string;
+    hospitalName?: string;
+    diagnosis?: string;
+    shortNote?: string;
+    fullText?: string;
     isCompleted?: boolean;
     notificationSchedule?: { snoozedUntil?: string | null; leadMinutes?: number };
   }>,
@@ -202,13 +212,20 @@ export function buildSyncPayload(
     const sn = r.notificationSchedule?.snoozedUntil ? Date.parse(r.notificationSchedule.snoozedUntil) : NaN;
     // Long-overdue reminders are dropped, unless the snooze has not ended yet: its wake-up alert must still reach the push server.
     if (dueAt < now - 24 * 3_600_000 && !(isSyncableInstant(sn) && sn > now)) continue;
-    byId.set(r.id, {
+    const item: SyncedReminder = {
       id: r.id,
       title: String(r.eventTitle || 'Reminder').slice(0, 120),
       dueAt,
       leadMinutes: clampLeadMinutes(r.notificationSchedule?.leadMinutes ?? DEFAULT_LEAD_MINUTES),
       snoozedUntil: isSyncableInstant(sn) ? sn : null,
-    });
+    };
+    // Optional display fields: only present when they carry information (keeps the payload minimal).
+    const category = categoryLabel(r.category);
+    if (category) item.category = category;
+    const detail = buildNotificationDetail(r);
+    if (detail) item.detail = detail;
+    if (parseTimeOrNull(r.appointmentTime) === null) item.allDay = true;
+    byId.set(r.id, item);
   }
   return [...byId.values()].sort((a, b) => a.dueAt - b.dueAt).slice(0, max);
 }

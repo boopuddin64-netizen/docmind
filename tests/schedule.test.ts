@@ -150,7 +150,9 @@ test('buildSyncPayload: drops completed/invalid/very old, de-dupes by id, minima
   assert.deepEqual(list.map((r) => r.id).sort(), ['snz', 'x']);
   assert.equal(list.find((r) => r.id === 'x')!.title, 'second');
   assert.equal(list.find((r) => r.id === 'snz')!.snoozedUntil, Date.parse('2026-09-29T12:00:00.000Z'));
-  assert.deepEqual(Object.keys(list[0]).sort(), ['dueAt', 'id', 'leadMinutes', 'snoozedUntil', 'title']);
+  const allowed = new Set(['allDay', 'category', 'detail', 'dueAt', 'id', 'leadMinutes', 'snoozedUntil', 'title']); // display fields are optional and short
+  for (const r of list) for (const k of Object.keys(r)) assert.ok(allowed.has(k), `unexpected synced field ${k}`);
+  assert.ok(!('fullText' in list[0]) && !('patientName' in list[0]) && !('hospitalName' in list[0]));
 });
 
 test('planAlerts: fires once, never twice, survives a reload (fired map persisted)', () => {
@@ -170,12 +172,12 @@ test('planAlerts: heads-up then due are two separate notifications, each once', 
   const rs = [uiReminder()];
   const a = planAlerts(rs, {}, due - 30 * MIN);
   assert.equal(a.notifications.length, 1);
-  assert.match(a.notifications[0].body, /minute/);
+  assert.match(a.notifications[0].body, /^Due: .* \(in 30 minutes\)/);
   const b = planAlerts(rs, a.fired, due - 29 * MIN);
   assert.equal(b.notifications.length, 0);
   const c = planAlerts(rs, b.fired, due + 1000);
   assert.equal(c.notifications.length, 1);
-  assert.equal(c.notifications[0].body, 'Due now');
+  assert.match(c.notifications[0].body, /^Due: Tue, 29 Sep 2026 at 10:00 AM \(now\)/);
 });
 
 test('planAlerts: completed reminder never fires; snooze suppresses; missed alerts fire on reopen', () => {
