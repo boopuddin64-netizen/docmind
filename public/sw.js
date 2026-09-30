@@ -1,5 +1,5 @@
 /* DocuMind service worker: offline shell + Web Push notifications. */
-const CACHE_NAME = "docmind-pwa-v6";
+const CACHE_NAME = "docmind-pwa-v7";
 const ASSETS_TO_CACHE = [
   "/",
   "/index.html",
@@ -9,6 +9,7 @@ const ASSETS_TO_CACHE = [
   "/icon-192.png",
   "/icon-512.png",
   "/favicon.png",
+  "/badge-96.png",
   "/docmind_logo.jpg"
 ];
 
@@ -88,44 +89,63 @@ self.addEventListener("fetch", (event) => {
 });
 
 // ───────────── Web Push ─────────────
+//
+// Everything that makes a phone show a push as a heads-up banner (not just a silent tray entry):
+//  - the sender uses urgency "high" (see push-server/core.ts), so the device wakes and delivers immediately;
+//  - silent:false + vibrate: Android plays the channel sound and vibrates (a notification without vibrate/sound is demoted to "silent");
+//  - requireInteraction: stays on screen until the user reacts;
+//  - a per-reminder tag + renotify:true: a repeat / snooze wake-up alerts again instead of silently replacing the old one;
+//  - a monochrome badge (status bar) and a coloured icon.
+// Keep in step with src/lib/notificationOptions.ts (tests/notificationOptions.test.ts runs this handler and checks both).
+const VIBRATE_PATTERN = [300, 150, 300, 150, 600];
+const ICON = "/icon-192.png";
+const BADGE = "/badge-96.png";
 
 self.addEventListener("push", (event) => {
   let data = {};
   try {
     data = event.data ? event.data.json() : {};
   } catch (e) {
-    data = { title: "DocuMind", body: event.data ? event.data.text() : "You have a reminder." };
+    data = { title: "DocuMind reminder", body: event.data ? event.data.text() : "" };
   }
-  const title = data.title || "DocuMind reminder";
-  const reminderId = data.reminderId || "";
+  if (!data || typeof data !== "object") data = {};
+  const title = (typeof data.title === "string" && data.title.trim()) || "DocuMind reminder";
+  const body = (typeof data.body === "string" && data.body.trim()) || "You have a reminder due. Open DocuMind for details.";
+  const reminderId = typeof data.reminderId === "string" ? data.reminderId : "";
+  const isTest = data.test === true;
   const options = {
-    body: data.body || "",
-    icon: "/icon-192.png",
-    badge: "/favicon.png",
-    // tag == reminder id: a later "due" push replaces the earlier heads-up for the same reminder instead of stacking,
-    // and also replaces the identical alert shown by the open page.
-    tag: data.tag || reminderId || "docmind-reminder",
+    body,
+    icon: ICON,
+    badge: BADGE,
+    // tag == reminder id: the "due" / snooze push for a reminder replaces its earlier heads-up instead of stacking,
+    // and renotify makes that replacement alert (sound + vibration + banner) again. Tests use a unique tag.
+    tag: data.tag || reminderId || "docmind-reminder-" + Date.now(),
     renotify: true,
+    silent: false,
     requireInteraction: true,
-    data: { reminderId, url: data.url || "/", dueAt: data.dueAt || null },
+    vibrate: VIBRATE_PATTERN,
+    timestamp: Date.now(),
+    data: { reminderId, url: data.url || "/", dueAt: data.dueAt || null, test: isTest },
     actions: reminderId
       ? [
-          { action: "snooze", title: "Snooze 1h" },
+          { action: "snooze", title: "Snooze…" },
           { action: "done", title: "Mark done" }
         ]
       : []
   };
   event.waitUntil(
-    Promise.all([
-      self.registration.showNotification(title, options),
-      // Remember the event so the page does not show the same alert again when it is reopened.
-      data.eventKey
-        ? caches
-            .open("docmind-fired")
-            .then((c) => c.put("/__fired/" + encodeURIComponent(data.eventKey), new Response("1")))
-            .catch(() => {})
-        : Promise.resolve()
-    ])
+    (async () => {
+      // Show first; only afterwards remember the event, so an alert that failed to show is never treated as delivered.
+      await self.registration.showNotification(title, options);
+      if (data.eventKey) {
+        try {
+          const c = await caches.open("docmind-fired");
+          await c.put("/__fired/" + encodeURIComponent(data.eventKey), new Response("1"));
+        } catch (e) {
+          /* best effort */
+        }
+      }
+    })()
   );
 });
 
@@ -142,17 +162,19 @@ self.addEventListener("notificationclick", (event) => {
       const msg = { type: "docmind-notification-action", action, reminderId: id };
       if (clientsList.length > 0) {
         const c = clientsList.find((x) => x.focused) || clientsList[0];
-        // Actions (snooze / done) are applied by the app itself; focus only for a plain open.
+        // The app applies the action itself. "snooze" opens the snooze picker (six choices), so it needs the app in front.
         c.postMessage(msg);
-        if (action === "open" && "focus" in c) await c.focus();
+        if (action !== "done" && "focus" in c) await c.focus();
         return;
       }
       // App is closed: open it; it applies the action from the URL on start-up.
-      const base = d.url || "/";
-      const u = new URL(base, self.location.origin);
-      if (action !== "open" && id) {
-        u.searchParams.set("dm_action", action);
-        u.searchParams.set("dm_id", id);
+      const u = new URL(d.url || "/", self.location.origin);
+      if (id) {
+        if (action === "snooze") u.searchParams.set("snooze", id); // deep link: /?snooze=<reminderId>
+        else if (action === "done") {
+          u.searchParams.set("dm_action", "done");
+          u.searchParams.set("dm_id", id);
+        }
       }
       await self.clients.openWindow(u.pathname + u.search);
     })()

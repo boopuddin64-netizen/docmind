@@ -1,5 +1,6 @@
 import { Reminder } from '../types';
 import { calendarDaysUntil, parseDateParts } from './schedule';
+import { loudNotificationOptions } from './notificationOptions';
 
 export interface PendingAlert {
   reminderId: string;
@@ -130,15 +131,8 @@ export async function dispatchNativeNotification(
   reminderId?: string,
 ): Promise<boolean> {
   if (typeof window === 'undefined' || !('Notification' in window) || Notification.permission !== 'granted') return false;
-  const options: NotificationOptions & { renotify?: boolean } = {
-    body,
-    // Reminders must not vanish on their own (desktop Chrome auto-closes plain notifications after a few seconds).
-    requireInteraction: tag !== 'docmind-test',
-    icon: iconUrl || '/icon-192.png',
-    badge: '/favicon.png',
-    tag,
-    data: { reminderId: reminderId || '', url: '/' },
-  };
+  // Same loud options as the service worker's push handler (sound, vibration, sticky, renotify, monochrome badge).
+  const options = loudNotificationOptions({ body, tag, reminderId, icon: iconUrl }) as NotificationOptions;
   try {
     if ('serviceWorker' in navigator) {
       const reg = await navigator.serviceWorker.getRegistration();
@@ -156,5 +150,17 @@ export async function dispatchNativeNotification(
   } catch (e) {
     console.warn('Native notification spawn failed:', e);
     return false;
+  }
+}
+
+/** Closes the notification(s) with this tag that are still in the tray (used when the user snoozes/completes from inside the app). */
+export async function closeNotificationsByTag(tag: string): Promise<void> {
+  try {
+    if (typeof navigator === 'undefined' || !('serviceWorker' in navigator)) return;
+    const reg = await navigator.serviceWorker.getRegistration();
+    const list = (await reg?.getNotifications({ tag })) ?? [];
+    for (const n of list) n.close();
+  } catch {
+    /* best effort */
   }
 }

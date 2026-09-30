@@ -5,6 +5,7 @@ import {
   isConfigured,
   isCronAuthorized,
   loadConfig,
+  sendTestPush,
   subscribe,
   syncReminders,
   unsubscribe,
@@ -41,6 +42,7 @@ export function registerPushRoutes(app: Express, deps?: PushDeps | (() => PushDe
   app.get('/api/push/public-key', guard((_req, res) => send(res, getPublicKey(d()))));
   app.post('/api/push/subscribe', guard(async (req, res) => send(res, await subscribe(d(), req.body))));
   app.post('/api/push/unsubscribe', guard(async (req, res) => send(res, await unsubscribe(d(), req.body, bearer(req)))));
+  app.post('/api/push/test', guard(async (req, res) => send(res, await sendTestPush(d(), req.body, bearer(req)))));
   app.post('/api/push/sync-reminders', guard(async (req, res) => send(res, await syncReminders(d(), req.body, bearer(req)))));
 
   // Cron / dispatch endpoint. Called every minute by an external timer (cron-job.org) or by Vercel Cron.

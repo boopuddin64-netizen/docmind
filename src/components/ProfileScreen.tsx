@@ -45,6 +45,8 @@ interface ProfileScreenProps {
   onToggleNotifications?: () => void;
   onRestoreBackup?: (restoredReminders: Reminder[], restoredProfile?: UserProfile) => void;
   onTestDeviceAlert?: () => void;
+  /** Sends a real test push to this device's own subscription (verifies the closed-app pop-up). */
+  onSendTestPush?: () => Promise<void> | void;
   /** In-app toast (replaces window.alert). */
   onShowToast?: (message: string) => void;
 }
@@ -68,11 +70,14 @@ export const ProfileScreen: React.FC<ProfileScreenProps> = ({
   onToggleNotifications,
   onRestoreBackup,
   onTestDeviceAlert,
+  onSendTestPush,
   onShowToast,
 }) => {
   const [isEditingProfile, setIsEditingProfile] = useState(false);
   const [isPreferencesOpen, setIsPreferencesOpen] = useState(true);
   const [isResetModalOpen, setIsResetModalOpen] = useState(false);
+  const [isSendingTest, setIsSendingTest] = useState(false);
+  const [testCooldown, setTestCooldown] = useState(false);
   const [profileName, setProfileName] = useState(userProfile.name);
   const [profileEmail, setProfileEmail] = useState(userProfile.email);
   const [profileAvatar, setProfileAvatar] = useState(userProfile.avatar);
@@ -592,6 +597,50 @@ export const ProfileScreen: React.FC<ProfileScreenProps> = ({
                   </button>
                 </div>
               )}
+
+              <div className="mt-2 rounded-xl border border-amber-200 dark:border-amber-800/40 bg-amber-50/70 dark:bg-amber-950/20 p-3 space-y-2" id="alert-popup-help">
+                <div className="flex items-center justify-between gap-2">
+                  <h3 className="text-[11px] font-bold text-amber-900 dark:text-amber-200">Make alerts pop up on your phone</h3>
+                  {onSendTestPush && (
+                    <button
+                      type="button"
+                      id="btn-send-test-push"
+                      disabled={isSendingTest || testCooldown}
+                      onClick={async () => {
+                        setIsSendingTest(true);
+                        try {
+                          await onSendTestPush();
+                        } finally {
+                          setIsSendingTest(false);
+                          setTestCooldown(true);
+                          setTimeout(() => setTestCooldown(false), 20_000);
+                        }
+                      }}
+                      className="shrink-0 px-2.5 py-1 bg-[#0284c7] hover:bg-[#0369a1] disabled:opacity-60 text-white text-[10px] font-bold rounded-lg transition-colors flex items-center gap-1 shadow-2xs"
+                    >
+                      <BellRing className="w-3 h-3 text-sky-100" />
+                      <span>{isSendingTest ? 'Sending…' : 'Send test notification'}</span>
+                    </button>
+                  )}
+                </div>
+                <p className="text-[10px] text-amber-900/80 dark:text-amber-200/80">
+                  Tap the button, then close the app or lock the screen. If nothing pops up, check the list below.
+                </p>
+                <div className="text-[10px] text-[#3f4945] dark:text-sky-200/90 space-y-1.5">
+                  <p className="font-bold">Android</p>
+                  <ul className="list-disc pl-4 space-y-0.5">
+                    <li>Settings &gt; Apps &gt; DocuMind (or Chrome, if you use it in the browser) &gt; Notifications: turned on, set to <b>Alert</b> / <b>Pop on screen</b>.</li>
+                    <li>Sound on (not Silent) and <b>Do Not Disturb off</b>.</li>
+                    <li>Battery &gt; Unrestricted for the app, so it is not put to sleep.</li>
+                  </ul>
+                  <p className="font-bold pt-1">iPhone / iPad</p>
+                  <ul className="list-disc pl-4 space-y-0.5">
+                    <li>Install first: Share &gt; <b>Add to Home Screen</b>, then open DocuMind from the Home Screen icon.</li>
+                    <li>Settings &gt; Notifications &gt; DocuMind: Allow Notifications, Banners on, <b>Banner Style: Persistent</b>, Sounds on.</li>
+                    <li>Focus / Do Not Disturb off.</li>
+                  </ul>
+                </div>
+              </div>
             </div>
 
             {/* Dark Mode Row */}

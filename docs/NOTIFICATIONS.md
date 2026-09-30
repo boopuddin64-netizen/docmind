@@ -14,6 +14,7 @@ Pushes use `tag = reminderId`, and the SW records each shown event, so the page 
 - `POST /api/push/subscribe` `{subscription}` → `{subscriptionId, token}` (token = per-subscription bearer secret; only its SHA-256 is stored)
 - `POST /api/push/sync-reminders` (Bearer token) `{subscriptionId, tzOffsetMinutes, reminders:[{id,title,dueAt,leadMinutes,snoozedUntil}]}` (max 500, deduped by id)
 - `POST /api/push/unsubscribe` (Bearer token)
+- `POST /api/push/test` (Bearer token) `{subscriptionId}` — sends one real, high-urgency test push to that subscription (Profile > "Send test notification"). Limited to 1 per subscription per 20 s (429), plus a per-IP limit (10 / 10 min).
 - `GET|POST /api/dispatch-alerts` — **requires `Authorization: Bearer $CRON_SECRET`**; sends due pushes, claims each event atomically (Redis `SET NX`) so overlapping runs never duplicate, prunes 404/410 subscriptions.
 
 ## Privacy
@@ -45,3 +46,11 @@ Vercel Hobby cron runs at most once per day (`vercel.json` keeps a daily 07:00 U
 - **Dispatch**: each send has an 8 s timeout, sends run in a worker pool, and no new send starts after ~35 s. The per-event claim is a 3 min *lease*; only a successful send turns it into the 30-day sent-marker, so a hung/failed send is retried and overlapping cron runs still never double-send. A send that *times out* leaves its lease to expire (the outcome is unknown), so it is retried after the lease.
 - **Dead subscriptions**: 404/410 → pruned immediately. 400/401/403 → pruned after 3 consecutive failures; other failures (timeouts, 5xx) → pruned after 10 consecutive failures spanning at least 24 h. Failing subscriptions back off 1 min → 30 min.
 - **Sync**: invalid reminders are skipped by the server (`skipped` count in the response) instead of failing the whole sync.
+
+## Loud (heads-up) notifications
+- Server: every push is sent with `urgency: high` and a 6 h TTL (test push: 2 min), so devices deliver immediately and Android treats it as high priority.
+- Service worker (`public/sw.js`): `silent:false`, `vibrate [300,150,300,150,600]`, `requireInteraction`, per-reminder `tag` + `renotify`, colour icon + monochrome badge (`/badge-96.png`), timestamp, actions **Snooze…** / **Mark done**. The "delivered" marker is written only after the notification was shown.
+- Whether Android shows a banner also depends on the app's notification channel (a PWA cannot create one): the user must set the app's notifications to Alert / Pop on screen, sound on, Do Not Disturb off. iOS: installed to the Home Screen, Banner Style Persistent. The Profile screen explains this and has a test button.
+
+## Snooze
+Exactly six durations: 5 min, 10 min, 30 min, 1 hour, 4 hours, 24 hours (`src/lib/snooze.ts`). Available in the alert popup, notification centre and reminder detail. The notification's **Snooze…** button opens the app at `/?snooze=<reminderId>` (or focuses it) and shows a picker with all six. Snoozing sets `snoozedUntil`, which the normal reminder sync sends to the push dispatcher, so the closed-app alert comes back after the delay.

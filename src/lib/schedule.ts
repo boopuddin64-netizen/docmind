@@ -194,8 +194,10 @@ export function buildSyncPayload(
     if (!r || r.isCompleted || typeof r.id !== 'string' || !r.id || r.id.length > 100) continue;
     const dueAt = computeDueAt(r.appointmentDate, r.appointmentTime);
     // Same range the server accepts (0 … MAX_DUE_AT_MS): one out-of-range item must never make the whole sync fail.
-    if (dueAt === null || !isSyncableInstant(dueAt) || dueAt < now - 24 * 3_600_000) continue;
+    if (dueAt === null || !isSyncableInstant(dueAt)) continue;
     const sn = r.notificationSchedule?.snoozedUntil ? Date.parse(r.notificationSchedule.snoozedUntil) : NaN;
+    // Long-overdue reminders are dropped, unless the snooze has not ended yet: its wake-up alert must still reach the push server.
+    if (dueAt < now - 24 * 3_600_000 && !(isSyncableInstant(sn) && sn > now)) continue;
     byId.set(r.id, {
       id: r.id,
       title: String(r.eventTitle || 'Reminder').slice(0, 120),
