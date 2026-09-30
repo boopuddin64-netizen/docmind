@@ -142,6 +142,7 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({
               <button
                 type="button"
                 onClick={() => setHomeSearchQuery('')}
+                aria-label="Clear search"
                 className="absolute right-3 text-[#707975] dark:text-sky-300 hover:text-[#191c1d]"
               >
                 <X className="w-4 h-4" />
@@ -259,10 +260,10 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({
                         {rem.appointmentDate} at {rem.appointmentTime}
                       </span>
                     </div>
-                    <h3 className="text-base font-semibold text-[#191c1d] dark:text-white">
+                    <h3 className="text-base font-semibold text-[#191c1d] dark:text-white line-clamp-2 break-words">
                       {rem.eventTitle}
                     </h3>
-                    <p className="text-xs text-[#3f4945] dark:text-sky-300/80 line-clamp-1 mt-0.5">
+                    <p className="text-xs text-[#3f4945] dark:text-sky-300/80 line-clamp-1 break-words mt-0.5">
                       {rem.hospitalName} — {rem.patientName}
                     </p>
                   </div>

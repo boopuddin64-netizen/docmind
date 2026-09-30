@@ -6,10 +6,12 @@
  */
 import express from "express";
 import { GoogleGenAI, Type } from "@google/genai";
-import { buildIcsContent, icsFilename } from "../src/lib/icsBuilder.js";
+import { buildIcsContent, icsFilename, isValidIcsDateInput } from "../src/lib/icsBuilder.js";
 import { escapeRegExp } from "../src/lib/profileMatch.js";
 import { registerPushRoutes } from "../push-server/routes.js";
-import { pushGuards } from "../push-server/security.js";
+import { createRateLimiter, pushGuards } from "../push-server/security.js";
+import { validateScanRequest } from "./scanValidation.js";
+import { toDdMmYyyy } from "../src/lib/dateInput.js";
 import type { PushDeps } from "../push-server/core.js";
 
 // Initialize Gemini Client server-side
@@ -26,19 +28,47 @@ const getGeminiClient = () => {
   });
 };
 
-export function createApiApp(pushDeps?: PushDeps) {
+export interface ApiAppOptions {
+  /** /api/scan-document limiter (per IP). Default: 20 requests / 10 minutes. */
+  scanRateLimit?: { windowMs: number; max: number };
+  /** Test seam: supplies the Gemini client (return null = not configured). Defaults to the env-configured client. */
+  getAi?: () => Pick<GoogleGenAI, "models"> | null;
+  now?: () => number;
+}
+
+/** Largest JSON body the generic parser accepts: a 4 MB base64 image plus overhead (Vercel itself caps bodies at 4.5 MB). */
+const JSON_BODY_LIMIT = "5mb";
+
+export function createApiApp(pushDeps?: PushDeps, opts: ApiAppOptions = {}) {
   const router = express();
   router.disable("x-powered-by");
 
-  // /api/push/* gets its own guards (rate limit, small body limits) BEFORE the generic 25 MB parser (only document scans need that).
+  const scanLimiter = createRateLimiter({
+    windowMs: opts.scanRateLimit?.windowMs ?? 10 * 60_000,
+    max: opts.scanRateLimit?.max ?? 20,
+    now: opts.now,
+  });
+
+  // /api/push/* gets its own guards (rate limit, small body limits) BEFORE the generic parser.
   router.use("/api/push", ...pushGuards());
-  router.use(express.json({ limit: "25mb" }));
+  // Rate-limit scans BEFORE the (large) body is parsed.
+  router.use("/api/scan-document", scanLimiter);
+  router.use(express.json({ limit: JSON_BODY_LIMIT }));
+
+  // API: health check (no secrets, no dependency calls)
+  router.get("/api/health", (_req, res) => {
+    res.setHeader("Cache-Control", "no-store");
+    res.json({ success: true, status: "ok", time: new Date().toISOString() });
+  });
 
   // API: Download iCal (.ics) Calendar File
   router.get("/api/download-ics", (req, res) => {
     try {
       const q = (k: string, def = '') => (typeof req.query[k] === 'string' ? (req.query[k] as string) : def);
       const title = q('title', 'Reminder');
+      if (!isValidIcsDateInput(q('date'))) {
+        return res.status(400).json({ success: false, error: 'Invalid date. Use DD/MM/YYYY or YYYY-MM-DD.' });
+      }
       const icsContent = buildIcsContent({
         title,
         note: q('note'),
@@ -53,68 +83,38 @@ export function createApiApp(pushDeps?: PushDeps) {
       res.setHeader('Content-Disposition', `inline; filename="${filename}"`);
       return res.send(icsContent);
     } catch (e: any) {
-      return res.status(500).json({ error: e.message });
+      console.error("download-ics error:", e);
+      return res.status(500).json({ success: false, error: "Could not build the calendar file." });
     }
   });
 
   // API: Document Scan Endpoint
   router.post("/api/scan-document", async (req, res) => {
+    const validated = validateScanRequest(req.body);
+    if ("error" in validated) {
+      return res.status(validated.status).json({ success: false, error: validated.error });
+    }
+    const { documentText, imageBase64, mimeType, userName, familyNames } = validated.value;
+
     try {
-      const { documentText, imageBase64, mimeType = "image/jpeg", sampleId, userName = "User Account", familyMembers = [] } = req.body;
-
-      const ai = getGeminiClient();
-
-      // Extract registered family/profile names passed from client
-      const rawFamilyList: string[] = Array.isArray(familyMembers)
-        ? familyMembers.map((f: any) => (typeof f === 'string' ? f : f.name)).filter(Boolean)
-        : [];
-
-      // If no additional family members exist in profile, search strictly for main user name only!
-      const profileNames = rawFamilyList.length > 0 ? rawFamilyList : [userName];
-      const allowedNamesPrompt = profileNames.join('", "');
-
-      const getDefaultScanResult = (inputNote?: string) => {
-        const docName = inputNote || "Scanned Document";
-        const cleanTitle = docName.replace(/\.[^/.]+$/, "").replace(/[-_]/g, " ");
-        const formattedTitle = cleanTitle.charAt(0).toUpperCase() + cleanTitle.slice(1);
-
-        const defaultItem = {
-          hospitalName: "Document Issuer",
-          patientName: userName,
-          patientMatch: "Matches Profile: Self",
-          diagnosis: `Scanned details for ${formattedTitle}`,
-          appointmentDate: new Date().toLocaleDateString('en-GB'),
-          appointmentTime: "08:00 AM",
-          eventTitle: formattedTitle.length > 35 ? formattedTitle.substring(0, 35) : formattedTitle,
-          shortNote: "Review scanned document details and action items.",
-          fullText: inputNote || `Scanned document processed for ${userName}.`,
-          accuracy: 98,
-          category: "General",
-        };
-
-        return {
-          ...defaultItem,
-          extractedItems: [defaultItem],
-        };
-      };
-
+      const ai = (opts.getAi ?? getGeminiClient)();
       if (!ai) {
-        return res.json({
-          success: true,
-          source: "fallback",
-          data: getDefaultScanResult(documentText),
-        });
+        // No fake result: the client shows an honest error and offers manual entry.
+        console.error("scan-document: GEMINI_API_KEY is not configured");
+        return res.status(503).json({ success: false, code: "SCAN_UNAVAILABLE", error: "Document scanning is not available right now. Please add the reminder manually." });
       }
+
+      // Registered family/profile names passed from the client (main user only when there are none).
+      // Quotes/newlines are stripped so a name can not break out of the prompt's quoted list.
+      const clean = (n: string) => n.replace(/["\r\n]+/g, " ").trim();
+      const rawFamilyList = familyNames.map(clean).filter(Boolean);
+      const profileNames = rawFamilyList.length > 0 ? rawFamilyList : [clean(userName)];
+      const allowedNamesPrompt = profileNames.join('", "');
 
       try {
         const parts: any[] = [];
         if (imageBase64) {
-          parts.push({
-            inlineData: {
-              mimeType,
-              data: imageBase64.replace(/^data:[^;]+;base64,/, ""),
-            },
-          });
+          parts.push({ inlineData: { mimeType, data: imageBase64 } });
         }
 
         const promptText = `You are an expert AI document scanner and life reminder manager for DocuMind app.
@@ -140,15 +140,18 @@ For each appointment item, provide:
 - patientName (Recipient or Assigned Person Name, matching registered profile)
 - patientMatch ("Matches Profile: Self" or "Matches Profile: Household")
 - diagnosis (Role/Assignment description, Outline No., Subject, or Brief Description)
-- appointmentDate in format DD/MM/YYYY (e.g., 06/09/2026, 13/09/2026, 08/11/2026, 07/09/2026)
+- appointmentDate in format DD/MM/YYYY (e.g., 06/09/2026, 13/09/2026, 08/11/2026, 07/09/2026).
+  DATE RULES: prefer the explicit DUE / DEADLINE / PAY-BY / EXPIRY / APPOINTMENT date over an issue, statement, invoice or printed date.
+  Convert month-name dates to DD/MM/YYYY (e.g. "Nov 15, 2026" or "15th November 2026" -> "15/11/2026"; day-first when a numeric date is ambiguous).
+  If the document contains NO usable date, return an EMPTY STRING for appointmentDate. NEVER guess a date and NEVER use today's date.
 - appointmentTime (e.g., 08:00 AM; if time is not explicitly mentioned in document, default to 08:00 AM)
 - eventTitle (e.g., Public Talk Speaker, Public Talk Chairman, Midweek Prayer, Midweek Chairman)
 - shortNote (Specific role details, outline number, or instructions)
 - fullText (Summarized text of the document)
-- accuracy (Number 98 to 100)
+- accuracy (Number 0 to 100: your honest confidence that the extracted fields are correct; use a LOW number when text is blurry, partial or ambiguous)
 - category ("Medical" | "Bills & Invoices" | "Contracts & Legal" | "Vehicle & Home" | "Work & Study" | "Subscriptions" | "General")
 
-Document text/filename context: ${documentText || "Scan image provided"}`;
+Document text/filename context: ${documentText.trim() || "Scan image provided"}`;
 
         parts.push({ text: promptText });
 
@@ -217,6 +220,7 @@ Document text/filename context: ${documentText || "Scan image provided"}`;
         });
 
         const parsedData = JSON.parse(response.text || "{}");
+        if (!parsedData || typeof parsedData !== "object") throw new Error("Scan model returned a non-object result");
         
         function normalizePatientName(rawPatientName?: string, itemText?: string, userNameVal?: string, registeredList: string[] = []): { name: string; match: string } | null {
           const pName = (rawPatientName || "").trim();
@@ -270,29 +274,36 @@ Document text/filename context: ${documentText || "Scan image provided"}`;
                 eventTitle: item.eventTitle || parsedData.eventTitle || "Assignment",
                 shortNote: item.shortNote || parsedData.shortNote || "",
                 fullText: item.fullText || parsedData.fullText || documentText || "",
-                accuracy: item.accuracy || parsedData.accuracy || 98,
+                // Never invent confidence: a missing value is low, which sends the result to the human review step.
+                accuracy: Number(item.accuracy) || Number(parsedData.accuracy) || 60,
                 category: item.category || parsedData.category || "General",
               };
             })
             .filter(Boolean);
         }
 
-        // Post-processing date splitter: if an item's appointmentDate contains multiple dates separated by comma/and, split them
+        // Post-processing date handling. A full date ("Nov 15, 2026") is parsed as one date; otherwise multi-date strings
+        // are split on comma/and. Anything that is not a real date becomes "" so the user fills it in (never "today").
         const itemsList: any[] = [];
         for (const item of rawItemsList) {
-          const dateStr = item.appointmentDate || "";
+          const dateStr = String(item.appointmentDate || "");
+          const whole = toDdMmYyyy(dateStr);
+          if (whole) {
+            itemsList.push({ ...item, appointmentDate: whole });
+            continue;
+          }
           const splitDates = dateStr.split(/,|&|\band\b/i).map((s: string) => s.trim()).filter((s: string) => s.length > 0);
           // Don't split "Sep 13, 2026" into "Sep 13" + "2026": a bare year is not a date.
           if (splitDates.length > 1 && !splitDates.some((s: string) => /^\d{4}$/.test(s))) {
             splitDates.forEach((singleDate: string, dIdx: number) => {
               itemsList.push({
                 ...item,
-                appointmentDate: singleDate,
+                appointmentDate: toDdMmYyyy(singleDate),
                 eventTitle: `${item.eventTitle} (Date #${dIdx + 1})`,
               });
             });
           } else {
-            itemsList.push(item);
+            itemsList.push({ ...item, appointmentDate: "" });
           }
         }
 
@@ -307,7 +318,7 @@ Document text/filename context: ${documentText || "Scan image provided"}`;
           eventTitle: "No Matches Found",
           shortNote: "No registered profile names were found assigned in this document page.",
           fullText: documentText || "",
-          accuracy: 100,
+          accuracy: 60,
           category: "General",
           extractedItems: []
         };
@@ -321,16 +332,13 @@ Document text/filename context: ${documentText || "Scan image provided"}`;
           },
         });
       } catch (geminiError) {
-        console.error("Gemini API scan error, using fallback:", geminiError);
-        return res.json({
-          success: true,
-          source: "fallback-error",
-          data: getDefaultScanResult(documentText),
-        });
+        // Details stay in the server log; the client only gets a generic message.
+        console.error("Gemini scan error:", geminiError);
+        return res.status(502).json({ success: false, code: "SCAN_FAILED", error: "We could not read this document. Please try again or add the reminder manually." });
       }
-    } catch (err: any) {
+    } catch (err) {
       console.error("Scan server error:", err);
-      res.status(500).json({ success: false, error: err.message });
+      return res.status(500).json({ success: false, code: "SCAN_ERROR", error: "Something went wrong while scanning. Please try again." });
     }
   });
 
@@ -349,13 +357,32 @@ Document text/filename context: ${documentText || "Scan image provided"}`;
           status: "Normalized & Cleaned"
         }
       });
-    } catch (e: any) {
-      res.status(500).json({ success: false, error: e.message });
+    } catch (e) {
+      console.error("preprocess error:", e);
+      res.status(500).json({ success: false, error: "Preprocessing failed." });
     }
   });
 
   // Web Push (VAPID) endpoints + cron dispatcher (replaces the old stub /api/dispatch-alerts)
   registerPushRoutes(router, pushDeps);
+
+  // Unknown /api/* routes: JSON 404 (never an HTML page)
+  router.use("/api", (_req, res) => {
+    res.status(404).json({ success: false, error: "Not found" });
+  });
+
+  // JSON error handler for the whole API (registered last): malformed JSON, oversized bodies, anything unexpected.
+  router.use((err: any, req: express.Request, res: express.Response, next: express.NextFunction) => {
+    if (res.headersSent) return next(err);
+    if (!req.path.startsWith("/api/")) return next(err);
+    if (err?.type === "entity.parse.failed") return void res.status(400).json({ success: false, error: "Invalid JSON" });
+    if (err?.type === "entity.too.large") return void res.status(413).json({ success: false, error: "Request body too large." });
+    if (err?.type === "charset.unsupported" || err?.type === "encoding.unsupported") {
+      return void res.status(400).json({ success: false, error: "Invalid request body." });
+    }
+    console.error("Unhandled API error:", err);
+    res.status(500).json({ success: false, error: "Internal server error" });
+  });
 
   return router;
 }

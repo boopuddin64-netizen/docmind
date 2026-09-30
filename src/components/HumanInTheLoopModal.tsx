@@ -1,3 +1,5 @@
+import { validateDateField, validateTimeField } from '../lib/dateInput';
+import { FIELD_LIMITS } from '../lib/formValidation';
 import React, { useState } from 'react';
 import { ExtractedDocData, FieldConfidence, ReminderCategory } from '../types';
 import {
@@ -16,6 +18,7 @@ import {
   RotateCcw,
   Eye
 } from 'lucide-react';
+import { useEscapeKey } from '../lib/useEscapeKey';
 
 interface HumanInTheLoopModalProps {
   isOpen: boolean;
@@ -30,8 +33,7 @@ export const HumanInTheLoopModal: React.FC<HumanInTheLoopModalProps> = ({
   onConfirm,
   onCancel,
 }) => {
-  if (!isOpen) return null;
-
+  useEscapeKey(isOpen, onCancel);
   const initialItems = (extractedData.extractedItems && extractedData.extractedItems.length > 0)
     ? extractedData.extractedItems
     : [extractedData];
@@ -91,17 +93,34 @@ export const HumanInTheLoopModal: React.FC<HumanInTheLoopModalProps> = ({
     );
   };
 
+  const [dateError, setDateError] = useState<string | null>(null);
+
   const handleConfirmAll = () => {
+    const checked = items.map((item) => {
+      const d = validateDateField(item.appointmentDate || '');
+      const t = validateTimeField(item.appointmentTime || '');
+      return { item, d, t };
+    });
+    const badIdx = checked.findIndex((c) => !c.d.ok || !c.t.ok);
+    if (badIdx >= 0) {
+      setSelectedIndex(badIdx);
+      setDateError((!checked[badIdx].d.ok ? checked[badIdx].d.error : checked[badIdx].t.error) || 'Check the date and time.');
+      return;
+    }
+    setDateError(null);
+    const fixed = checked.map(({ item, d, t }) => ({ ...item, appointmentDate: d.value, appointmentTime: t.value }));
     const verified = {
-      ...items[0],
-      extractedItems: items,
+      ...fixed[0],
+      extractedItems: fixed,
     };
     onConfirm(verified);
   };
 
+  if (!isOpen) return null;
+
   return (
     <div className="fixed inset-0 z-50 bg-black/70 backdrop-blur-xs flex items-center justify-center p-3 sm:p-4 overflow-y-auto">
-      <div className="bg-white dark:bg-[#0c1e2e] w-full max-w-4xl rounded-2xl shadow-2xl border border-sky-900/20 overflow-hidden flex flex-col max-h-[92vh]">
+      <div role="dialog" aria-modal="true" aria-label="Review scanned document" className="bg-white dark:bg-[#0c1e2e] w-full max-w-4xl rounded-2xl shadow-2xl border border-sky-900/20 overflow-hidden flex flex-col max-h-[92vh]">
         {/* Header */}
         <div className="bg-[#0284c7] text-white px-5 py-3.5 flex items-center justify-between border-b border-sky-700/40">
           <div className="flex items-center gap-2.5">
@@ -124,6 +143,7 @@ export const HumanInTheLoopModal: React.FC<HumanInTheLoopModalProps> = ({
           </div>
           <button
             onClick={onCancel}
+            aria-label="Cancel review and close"
             className="text-sky-100/80 hover:text-white text-xs font-semibold px-2.5 py-1 rounded-md hover:bg-white/10 transition-colors"
           >
             Cancel
@@ -283,6 +303,7 @@ export const HumanInTheLoopModal: React.FC<HumanInTheLoopModalProps> = ({
                   type="text"
                   value={formData.eventTitle}
                   onChange={(e) => handleFieldChange('eventTitle', e.target.value)}
+                  maxLength={FIELD_LIMITS.title}
                   className="w-full px-3 py-2 text-xs rounded-lg border border-slate-300 dark:border-sky-800 bg-white dark:bg-[#07131e] text-slate-900 dark:text-white font-medium focus:ring-2 focus:ring-[#0284c7] outline-none"
                 />
               </div>
@@ -299,6 +320,7 @@ export const HumanInTheLoopModal: React.FC<HumanInTheLoopModalProps> = ({
                     type="text"
                     value={formData.hospitalName}
                     onChange={(e) => handleFieldChange('hospitalName', e.target.value)}
+                    maxLength={FIELD_LIMITS.issuer}
                     className="w-full px-3 py-1.5 text-xs rounded-lg border border-slate-300 dark:border-sky-800 bg-white dark:bg-[#07131e] text-slate-900 dark:text-white outline-none"
                   />
                 </div>
@@ -330,7 +352,12 @@ export const HumanInTheLoopModal: React.FC<HumanInTheLoopModalProps> = ({
                     type="text"
                     placeholder="DD/MM/YYYY"
                     value={formData.appointmentDate}
-                    onChange={(e) => handleFieldChange('appointmentDate', e.target.value)}
+                    onChange={(e) => {
+                      handleFieldChange('appointmentDate', e.target.value);
+                      setDateError(null);
+                    }}
+                    maxLength={20}
+                    aria-invalid={!!dateError}
                     className="w-full px-2.5 py-1.5 text-xs rounded-lg border border-slate-300 dark:border-sky-800 bg-white dark:bg-[#07131e] text-slate-900 dark:text-white outline-none font-mono"
                   />
                 </div>
@@ -345,7 +372,11 @@ export const HumanInTheLoopModal: React.FC<HumanInTheLoopModalProps> = ({
                     type="text"
                     placeholder="10:00 AM"
                     value={formData.appointmentTime}
-                    onChange={(e) => handleFieldChange('appointmentTime', e.target.value)}
+                    onChange={(e) => {
+                      handleFieldChange('appointmentTime', e.target.value);
+                      setDateError(null);
+                    }}
+                    maxLength={12}
                     className="w-full px-2.5 py-1.5 text-xs rounded-lg border border-slate-300 dark:border-sky-800 bg-white dark:bg-[#07131e] text-slate-900 dark:text-white outline-none"
                   />
                 </div>
@@ -368,6 +399,10 @@ export const HumanInTheLoopModal: React.FC<HumanInTheLoopModalProps> = ({
                 </div>
               </div>
 
+              {dateError && (
+                <p role="alert" className="text-[11px] font-semibold text-rose-600 dark:text-rose-400 -mt-1">{dateError}</p>
+              )}
+
               {/* Short Note / Key Summary */}
               <div>
                 <label className="block text-xs font-semibold text-slate-700 dark:text-slate-200 mb-1">
@@ -377,6 +412,7 @@ export const HumanInTheLoopModal: React.FC<HumanInTheLoopModalProps> = ({
                   rows={2}
                   value={formData.shortNote}
                   onChange={(e) => handleFieldChange('shortNote', e.target.value)}
+                  maxLength={FIELD_LIMITS.note}
                   className="w-full px-3 py-1.5 text-xs rounded-lg border border-slate-300 dark:border-sky-800 bg-white dark:bg-[#07131e] text-slate-900 dark:text-white outline-none"
                 />
               </div>

@@ -23,13 +23,14 @@ import {
   VaultError,
   MIN_PASSPHRASE_LENGTH,
 } from '../lib/securityVault';
+import { useEscapeKey } from '../lib/useEscapeKey';
 
 interface ResetAndBackupModalProps {
   isOpen: boolean;
   onClose: () => void;
   reminders: Reminder[];
   userProfile: UserProfile;
-  onConfirmReset: () => void;
+  onConfirmReset: () => void | Promise<void>;
   onRestoreBackup?: (restoredReminders: Reminder[], restoredProfile?: UserProfile) => void;
 }
 
@@ -62,6 +63,7 @@ export const ResetAndBackupModal: React.FC<ResetAndBackupModalProps> = ({
 
   const fileInputRef = useRef<HTMLInputElement>(null);
 
+  useEscapeKey(isOpen, onClose);
   if (!isOpen) return null;
 
   // Encrypted Backup Download Handler (AES-256-GCM, passphrase-derived key)
@@ -241,7 +243,7 @@ export const ResetAndBackupModal: React.FC<ResetAndBackupModalProps> = ({
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-xs animate-in fade-in duration-200">
-      <div className="bg-white dark:bg-[#0c1e2e] border border-[#e1e3e4] dark:border-sky-900/50 rounded-3xl w-full max-w-lg overflow-hidden shadow-2xl flex flex-col max-h-[90vh]">
+      <div role="dialog" aria-modal="true" aria-label="Reset app data" className="bg-white dark:bg-[#0c1e2e] border border-[#e1e3e4] dark:border-sky-900/50 rounded-3xl w-full max-w-lg overflow-hidden shadow-2xl flex flex-col max-h-[90vh]">
         {/* Header */}
         <div className="p-5 bg-[#f8fafb] dark:bg-[#07131e] border-b border-[#e1e3e4] dark:border-sky-900/40 flex items-center justify-between">
           <div className="flex items-center gap-3">
@@ -261,6 +263,7 @@ export const ResetAndBackupModal: React.FC<ResetAndBackupModalProps> = ({
           <button
             onClick={onClose}
             className="w-8 h-8 rounded-full bg-slate-100 dark:bg-sky-900/40 text-slate-500 hover:text-slate-800 dark:text-sky-300 flex items-center justify-center transition-colors"
+            aria-label="Close reset dialog"
             id="btn-close-reset-modal"
           >
             <X className="w-4 h-4" />

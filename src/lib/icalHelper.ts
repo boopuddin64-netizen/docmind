@@ -1,4 +1,4 @@
-import { buildIcsContent, icsFilename } from './icsBuilder';
+import { buildIcsContent, icsFilename, isStrictIcsDate } from './icsBuilder';
 
 /**
  * Robust iCal (.ics) Calendar File Exporter
@@ -11,7 +11,9 @@ export function downloadIcsCalendar(reminder: {
   patientName?: string;
   appointmentDate?: string; // DD/MM/YYYY or YYYY-MM-DD
   appointmentTime?: string; // e.g. "08:00 AM" or "08:00"
-}) {
+}): boolean {
+  // Refuse to export an invalid / missing date (it would silently become "today" in the calendar).
+  if (!isStrictIcsDate(reminder.appointmentDate)) return false;
   const icsContent = buildIcsContent({
     title: reminder.eventTitle,
     note: reminder.shortNote,
@@ -44,6 +46,5 @@ export function downloadIcsCalendar(reminder: {
     document.body.removeChild(link);
     setTimeout(() => URL.revokeObjectURL(url), 1000);
   }
+  return true;
 }
-
-
