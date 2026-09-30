@@ -139,12 +139,12 @@ test('HTTP scan: per-IP rate limit → 429 JSON with Retry-After, before any mod
   assert.equal(calls, 3);
 });
 
-test('HTTP scan: default limit is 20 requests per window', async () => {
+test('HTTP scan: default limit is 40 requests per window', async () => {
   const app = createApiApp(pushDeps(), { getAi: () => null });
   await quiet(() => withServer(app, async (base) => {
     let firstBlocked = 0;
-    for (let i = 1; i <= 22; i++) { const r = await post(base, '/api/scan-document', { documentText: 'x' }); if (r.status === 429 && !firstBlocked) firstBlocked = i; }
-    assert.equal(firstBlocked, 21);
+    for (let i = 1; i <= 42; i++) { const r = await post(base, '/api/scan-document', { documentText: 'x' }); if (r.status === 429 && !firstBlocked) firstBlocked = i; }
+    assert.equal(firstBlocked, 41);
   }));
 });
 

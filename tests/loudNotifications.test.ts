@@ -301,7 +301,7 @@ test('sw: the event is marked delivered only AFTER the notification was shown; a
 
 test('sw: cache name is v10 (one above v9)', async () => {
   const sw = await loadSw();
-  assert.equal(sw.cacheName, 'docmind-pwa-v10');
+  assert.equal(sw.cacheName, 'docmind-pwa-v11');
   assert.match(sw.src, /"\/badge-96\.png"/, 'badge is precached');
 });
 

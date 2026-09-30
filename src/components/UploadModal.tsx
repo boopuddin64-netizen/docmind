@@ -16,6 +16,7 @@ import { preprocessDocumentImage } from '../lib/preprocessor';
 import { downscaleImage } from '../lib/scanClient';
 import { ScanError, classifyScanFailure, requestScan, type ScanFailure } from '../lib/scanErrors';
 import { PayloadTooLargeError, fitImageToBudget } from '../lib/largeFile';
+import { beginScan } from '../lib/scanActivity';
 import { PrepareError, prepareLargeFile, type PreparedScan } from '../lib/prepareUpload';
 import { useEscapeKey } from '../lib/useEscapeKey';
 import { loadDraft, pickStrings } from '../lib/persistedState';
@@ -77,6 +78,7 @@ export const UploadModal: React.FC<UploadModalProps> = ({
       return;
     }
     setIsScanning(true);
+    const endScan = beginScan(); // a soft refresh must never reload the page under a running scan
 
     try {
       let finalBase64 = payload.imageBase64;
@@ -131,6 +133,8 @@ export const UploadModal: React.FC<UploadModalProps> = ({
       setScanError(failure.message, failure);
       setIsScanning(false); // stay open: honest error state with Retry / Add manually
       setScanStatus(null);
+    } finally {
+      endScan();
     }
   };
 
@@ -154,6 +158,7 @@ export const UploadModal: React.FC<UploadModalProps> = ({
       }
       setIsScanning(true);
       setScanStatus('Reading this large file on your device first…');
+      const endPrepare = beginScan();
       try {
         const prepared = await prepareLargeFile(file, { kind: check.kind, mime: check.mime });
         if (prepared) {
@@ -169,6 +174,8 @@ export const UploadModal: React.FC<UploadModalProps> = ({
         setIsScanning(false);
         setScanStatus(null);
         return;
+      } finally {
+        endPrepare();
       }
     }
 
@@ -251,7 +258,7 @@ export const UploadModal: React.FC<UploadModalProps> = ({
             </div>
             <div>
               <h3 className="text-base font-bold text-[#191c1d] dark:text-white" id="scan-error-title">
-                {scanFailure?.kind === 'network' ? 'Connection problem' : scanFailure?.kind === 'too-large' ? 'File too large' : scanFailure?.kind === 'unsupported' ? 'Cannot read this file' : 'Scan failed'}
+                {scanFailure?.kind === 'network' ? 'Connection problem' : scanFailure?.kind === 'too-large' ? 'File too large' : scanFailure?.kind === 'unsupported' ? 'Cannot read this file' : scanFailure?.kind === 'busy' ? 'Scanner busy' : 'Scan failed'}
               </h3>
               <p className="text-xs text-[#3f4945] dark:text-sky-300/80 mt-1 max-w-xs">{scanError}</p>
               <p className="text-[11px] text-[#707975] dark:text-sky-300/60 mt-2 max-w-xs">
