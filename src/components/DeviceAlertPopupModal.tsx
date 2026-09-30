@@ -14,13 +14,14 @@ import {
 } from 'lucide-react';
 import { PendingAlert, requestNotificationPermission, dispatchNativeNotification } from '../lib/notifications';
 import { useEscapeKey } from '../lib/useEscapeKey';
+import { SnoozeOptions } from './SnoozeOptions';
 
 interface DeviceAlertPopupModalProps {
   isOpen: boolean;
   onClose: () => void;
   alerts: PendingAlert[];
   onSelectReminder: (reminderId: string) => void;
-  onSnoozeAlert: (reminderId: string, hours: number) => void;
+  onSnoozeAlert: (reminderId: string, minutes: number) => void;
   onMarkCompleted: (reminderId: string) => void;
   notificationsEnabled: boolean;
   onToggleNotifications: () => void;
@@ -189,29 +190,7 @@ export const DeviceAlertPopupModal: React.FC<DeviceAlertPopupModalProps> = ({
             <span className="text-[10px] font-bold text-[#707975] dark:text-sky-300/70 uppercase tracking-wider block">
               Snooze Alert Notification
             </span>
-            <div className="grid grid-cols-3 gap-2">
-              <button
-                type="button"
-                onClick={() => onSnoozeAlert(primaryAlert.reminderId, 1)}
-                className="py-1.5 px-2 bg-white dark:bg-[#0c1e2e] border border-slate-200 dark:border-sky-900/50 hover:bg-slate-100 text-xs font-bold rounded-xl text-[#3f4945] dark:text-sky-200 text-center transition-colors"
-              >
-                1 Hour
-              </button>
-              <button
-                type="button"
-                onClick={() => onSnoozeAlert(primaryAlert.reminderId, 4)}
-                className="py-1.5 px-2 bg-white dark:bg-[#0c1e2e] border border-slate-200 dark:border-sky-900/50 hover:bg-slate-100 text-xs font-bold rounded-xl text-[#3f4945] dark:text-sky-200 text-center transition-colors"
-              >
-                4 Hours
-              </button>
-              <button
-                type="button"
-                onClick={() => onSnoozeAlert(primaryAlert.reminderId, 24)}
-                className="py-1.5 px-2 bg-white dark:bg-[#0c1e2e] border border-slate-200 dark:border-sky-900/50 hover:bg-slate-100 text-xs font-bold rounded-xl text-[#3f4945] dark:text-sky-200 text-center transition-colors"
-              >
-                24 Hours
-              </button>
-            </div>
+            <SnoozeOptions idPrefix="alert-snooze" onPick={(m) => onSnoozeAlert(primaryAlert.reminderId, m)} />
           </div>
 
           {/* Additional Pending Alerts List if > 1 */}

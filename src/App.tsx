@@ -12,6 +12,8 @@ import { HumanInTheLoopModal } from './components/HumanInTheLoopModal';
 import { DuplicateMergeModal } from './components/DuplicateMergeModal';
 import { NotificationCenterDrawer } from './components/NotificationCenterDrawer';
 import { DeviceAlertPopupModal } from './components/DeviceAlertPopupModal';
+import { SnoozePickerModal } from './components/SnoozePickerModal';
+import { applySnooze, snoozeLabel } from './lib/snooze';
 import { SecurityVaultModal } from './components/SecurityVaultModal';
 import { Header } from './components/Header';
 import {
@@ -24,9 +26,9 @@ import {
 import { INITIAL_REMINDERS, INITIAL_USER_PROFILE } from './data/mockData';
 import { sanitizeAndValidateDocData } from './lib/sanitizer';
 import { checkForDuplicateReminder, generateCompositeDedupHash } from './lib/deduplication';
-import { checkUpcomingAlerts, dispatchNativeNotification, requestNotificationPermission } from './lib/notifications';
+import { checkUpcomingAlerts, closeNotificationsByTag, dispatchNativeNotification, requestNotificationPermission } from './lib/notifications';
 import { FIRED_STORAGE_KEY, loadPushFiredKeys, nextEventDelay, planAlerts, type FiredMap } from './lib/alertScheduler';
-import { disablePush, enablePush, pushSupported } from './lib/pushClient';
+import { disablePush, enablePush, isPushActive, pushSupported, sendTestPush } from './lib/pushClient';
 import { DEFAULT_SECURITY_SETTINGS, createAuditLog } from './lib/securityVault';
 import { CheckCircle2, BellRing } from 'lucide-react';
 
@@ -139,6 +141,27 @@ export default function App() {
     }
     setIsDeviceAlertPopupOpen(true);
     showToast('Testing Device Pop-Up Alert...');
+  };
+
+  const [snoozePickerId, setSnoozePickerId] = useState<string | null>(null);
+  /** Sends one REAL push (via the server, to this device's own subscription) so the user can see the closed-app pop-up behaviour. */
+  const handleSendTestPush = async () => {
+    setNotificationsEnabled(true);
+    if (!pushSupported()) {
+      showToast('This browser does not support push notifications. On iPhone, add DocuMind to the Home Screen first.', { durationMs: 8000 });
+      return;
+    }
+    if (!(await requestNotificationPermission())) {
+      showToast('Notifications are blocked. Allow them in your browser/phone settings, then try again.', { durationMs: 8000 });
+      return;
+    }
+    if (!isPushActive() && !(await enablePush(remindersRef.current))) {
+      showToast('Could not set up push on this device. Check your connection and that push is configured on the server.', { durationMs: 8000 });
+      return;
+    }
+    const r = await sendTestPush();
+    if ('message' in r) showToast(r.message, { durationMs: 8000 });
+    else showToast('Test sent. Close or minimise the app: it should pop up on screen with a sound.', { durationMs: 8000 });
   };
 
   const [activeSearchQuery, setActiveSearchQuery] = useState<string>('');
@@ -273,7 +296,7 @@ export default function App() {
   useEffect(() => {
     const apply = (action: string, id: string) => {
       if (!id) return;
-      if (action === 'snooze') handleSnoozeRef.current(id, 1);
+      if (action === 'snooze') setSnoozePickerId(id);
       if (action === 'done') handleMarkDoneRef.current(id);
       if (action === 'open') {
         const found = remindersRef.current.find((r) => r.id === id);
@@ -288,10 +311,15 @@ export default function App() {
     const params = new URLSearchParams(window.location.search);
     const a = params.get('dm_action');
     const id = params.get('dm_id');
+    const snoozeId = params.get('snooze'); // deep link from the notification's "Snooze…" button: /?snooze=<reminderId>
+    if (snoozeId) apply('snooze', snoozeId);
     if (a && id) {
       apply(a, id);
+    }
+    if ((a && id) || snoozeId) {
       params.delete('dm_action');
       params.delete('dm_id');
+      params.delete('snooze');
       const qs = params.toString();
       window.history.replaceState({}, '', window.location.pathname + (qs ? `?${qs}` : ''));
     }
@@ -494,23 +522,18 @@ export default function App() {
     showToast(`Added ${newReminder.eventTitle}`);
   };
 
-  const handleSnoozeAlert = (reminderId: string, hours: number) => {
-    const snoozeUntil = new Date(Date.now() + hours * 60 * 60 * 1000).toISOString();
-    setReminders((prev) =>
-      prev.map((r) => {
-        if (r.id === reminderId) {
-          return {
-            ...r,
-            notificationSchedule: {
-              ...r.notificationSchedule,
-              snoozedUntil: snoozeUntil,
-            },
-          };
-        }
-        return r;
-      })
-    );
-    showToast(`Snoozed alert for ${hours} hours`);
+  /**
+   * Snoozes a reminder for one of the six allowed durations (minutes). The new snoozedUntil is part of the reminder, so the
+   * push-sync effect sends it to the dispatcher and the closed-app alert comes back after the delay.
+   */
+  const handleSnoozeAlert = (reminderId: string, minutes: number) => {
+    const next = applySnooze(remindersRef.current, reminderId, minutes, Date.now());
+    if (!next) return;
+    setReminders(next);
+    setSelectedDetailReminder((cur) => (cur && cur.id === reminderId ? next.find((r) => r.id === reminderId) ?? cur : cur));
+    setSnoozePickerId(null);
+    void closeNotificationsByTag(reminderId);
+    showToast(`Snoozed for ${snoozeLabel(minutes)}`);
   };
 
   const handleRestoreBackup = (restoredReminders: Reminder[], restoredProfile?: UserProfile) => {
@@ -641,6 +664,7 @@ export default function App() {
             onToggleNotifications={toggleNotifications}
             onRestoreBackup={handleRestoreBackup}
             onTestDeviceAlert={handleTestDeviceAlert}
+            onSendTestPush={handleSendTestPush}
             onShowToast={showToast}
           />
         )}
@@ -678,7 +702,15 @@ export default function App() {
         onToggleComplete={handleToggleComplete}
         onDelete={handleDeleteReminder}
         onUpdateReminder={handleUpdateReminder}
+        onSnooze={handleSnoozeAlert}
         userProfile={userProfile}
+      />
+
+      {/* Snooze picker opened from the closed-app notification's "Snooze…" action */}
+      <SnoozePickerModal
+        title={snoozePickerId ? reminders.find((r) => r.id === snoozePickerId)?.eventTitle ?? 'Reminder' : null}
+        onPick={(m) => snoozePickerId && handleSnoozeAlert(snoozePickerId, m)}
+        onClose={() => setSnoozePickerId(null)}
       />
 
       {/* Layer 5: Human in the loop review modal */}

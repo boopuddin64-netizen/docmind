@@ -141,6 +141,8 @@ export interface PushGuardOptions {
   general?: { windowMs: number; max: number };
   /** POST /api/push/subscribe per IP (stricter: each one creates stored data). */
   subscribe?: { windowMs: number; max: number };
+  /** POST /api/push/test per IP (each one sends a real push). */
+  test?: { windowMs: number; max: number };
   now?: () => number;
 }
 
@@ -151,11 +153,13 @@ export interface PushGuardOptions {
 export function pushGuards(opts: PushGuardOptions = {}): Array<RequestHandler | ((err: any, req: Request, res: Response, next: NextFunction) => void)> {
   const general = createRateLimiter({ windowMs: opts.general?.windowMs ?? 60_000, max: opts.general?.max ?? 60, now: opts.now });
   const subscribeLimit = createRateLimiter({ windowMs: opts.subscribe?.windowMs ?? 10 * 60_000, max: opts.subscribe?.max ?? 10, now: opts.now });
+  const testLimit = createRateLimiter({ windowMs: opts.test?.windowMs ?? 10 * 60_000, max: opts.test?.max ?? 10, now: opts.now });
   const small = express.json({ limit: PUSH_BODY_LIMIT_DEFAULT });
   const sync = express.json({ limit: PUSH_BODY_LIMIT_SYNC });
   return [
     general,
     ((req, res, next) => (req.method === 'POST' && req.path === '/subscribe' ? subscribeLimit(req, res, next) : next())) as RequestHandler,
+    ((req, res, next) => (req.method === 'POST' && req.path === '/test' ? testLimit(req, res, next) : next())) as RequestHandler,
     ((req, res, next) => (req.path === '/sync-reminders' ? sync(req, res, next) : small(req, res, next))) as RequestHandler,
     (err: any, _req: Request, res: Response, next: NextFunction) => {
       if (err?.type === 'entity.too.large') return void res.status(413).json({ success: false, error: 'Request body too large.' });

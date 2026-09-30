@@ -21,6 +21,7 @@ import { downloadIcsCalendar } from '../lib/icalHelper';
 import { validateDateField, validateTimeField } from '../lib/dateInput';
 import { FIELD_LIMITS, clamp } from '../lib/formValidation';
 import { useEscapeKey } from '../lib/useEscapeKey';
+import { SnoozeOptions } from './SnoozeOptions';
 
 interface ReminderDetailModalProps {
   reminder: Reminder | null;
@@ -28,6 +29,8 @@ interface ReminderDetailModalProps {
   onToggleComplete: (id: string) => void;
   onDelete: (id: string) => void;
   onUpdateReminder?: (updated: Reminder) => void;
+  /** Snooze the reminder's alerts for one of the six allowed durations (minutes). */
+  onSnooze?: (reminderId: string, minutes: number) => void;
   userProfile?: UserProfile;
 }
 
@@ -37,6 +40,7 @@ export const ReminderDetailModal: React.FC<ReminderDetailModalProps> = ({
   onToggleComplete,
   onDelete,
   onUpdateReminder,
+  onSnooze,
   userProfile,
 }) => {
   const [isEditing, setIsEditing] = React.useState<boolean>(false);
@@ -395,6 +399,19 @@ export const ReminderDetailModal: React.FC<ReminderDetailModalProps> = ({
 
         {/* Modal Action Buttons */}
         <div className="pt-2 border-t border-[#e1e3e4] dark:border-sky-900/40 space-y-2">
+          {onSnooze && !reminder.isCompleted && (
+            <div className="bg-[#f8fafb] dark:bg-[#07131e] p-3 rounded-2xl border border-[#e1e3e4] dark:border-sky-900/40 space-y-2">
+              <span className="text-[10px] font-bold text-[#707975] dark:text-sky-300/70 uppercase tracking-wider block">
+                Snooze alerts
+              </span>
+              <SnoozeOptions idPrefix="detail-snooze" onPick={(m) => onSnooze(reminder.id, m)} />
+              {reminder.notificationSchedule?.snoozedUntil && new Date(reminder.notificationSchedule.snoozedUntil).getTime() > Date.now() && (
+                <p className="text-[11px] text-amber-700 dark:text-amber-300 font-medium">
+                  Snoozed until {new Date(reminder.notificationSchedule.snoozedUntil).toLocaleString([], { dateStyle: 'medium', timeStyle: 'short' })}
+                </p>
+              )}
+            </div>
+          )}
           <button
             onClick={() => {
               onToggleComplete(reminder.id);

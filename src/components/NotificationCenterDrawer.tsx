@@ -2,13 +2,14 @@ import React, { useState } from 'react';
 import { Reminder } from '../types';
 import { PendingAlert, requestNotificationPermission } from '../lib/notifications';
 import { Bell, BellRing, BellOff, CheckCircle2, Clock, Volume2, X, AlertTriangle, ShieldAlert } from 'lucide-react';
+import { SnoozeOptions } from './SnoozeOptions';
 import { useEscapeKey } from '../lib/useEscapeKey';
 
 interface NotificationCenterDrawerProps {
   isOpen: boolean;
   onClose: () => void;
   alerts: PendingAlert[];
-  onSnooze: (reminderId: string, hours: number) => void;
+  onSnooze: (reminderId: string, minutes: number) => void;
   onMarkCompleted: (reminderId: string) => void;
   notificationsEnabled?: boolean;
   onToggleNotifications?: () => void;
@@ -26,6 +27,8 @@ export const NotificationCenterDrawer: React.FC<NotificationCenterDrawerProps> =
   const [hasPushPermission, setHasPushPermission] = useState<boolean>(
     'Notification' in window && Notification.permission === 'granted'
   );
+
+  const [snoozeOpenFor, setSnoozeOpenFor] = useState<string | null>(null);
 
   useEscapeKey(isOpen, onClose);
   if (!isOpen) return null;
@@ -169,13 +172,27 @@ export const NotificationCenterDrawer: React.FC<NotificationCenterDrawerProps> =
 
                 <p className="text-[11px] opacity-90 mb-2">{item.message}</p>
 
+                {snoozeOpenFor === item.reminderId && (
+                  <div className="mb-2">
+                    <SnoozeOptions
+                      compact
+                      idPrefix={`drawer-snooze-${item.reminderId}`}
+                      onPick={(m) => {
+                        setSnoozeOpenFor(null);
+                        onSnooze(item.reminderId, m);
+                      }}
+                    />
+                  </div>
+                )}
+
                 {/* Quick Action Buttons */}
                 <div className="flex items-center justify-end gap-2 pt-1 border-t border-black/10 dark:border-white/10">
                   <button
-                    onClick={() => onSnooze(item.reminderId, 24)}
+                    onClick={() => setSnoozeOpenFor((cur) => (cur === item.reminderId ? null : item.reminderId))}
+                    aria-expanded={snoozeOpenFor === item.reminderId}
                     className="px-2 py-1 rounded-lg bg-black/5 dark:bg-white/10 hover:bg-black/10 text-[10px] font-semibold flex items-center gap-1"
                   >
-                    <Clock className="w-3 h-3" /> Snooze 24h
+                    <Clock className="w-3 h-3" /> Snooze…
                   </button>
                   <button
                     onClick={() => onMarkCompleted(item.reminderId)}

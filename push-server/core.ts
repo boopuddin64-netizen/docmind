@@ -51,6 +51,13 @@ export interface PushConfig {
   claimLeaseSeconds: number;
 }
 
+/** Reminder pushes stay deliverable for this long if the phone is offline/dozing (a stale reminder is still useful for hours). */
+export const REMINDER_PUSH_TTL_SECONDS = 6 * 3600;
+/** A test push is worthless after a couple of minutes. */
+export const TEST_PUSH_TTL_SECONDS = 120;
+/** One test push per subscription per this many seconds (atomic via the store's claim, so it holds across serverless instances). */
+export const TEST_PUSH_COOLDOWN_SECONDS = 20;
+
 export const DEFAULT_SEND_TIMEOUT_MS = 8_000;
 export const DEFAULT_DISPATCH_BUDGET_MS = 35_000; // + one 8s send in flight => ~43s worst case, under Vercel's 60s
 export const MAX_DISPATCH_BUDGET_MS = 45_000;
@@ -256,6 +263,69 @@ export async function syncReminders(deps: PushDeps, body: any, authHeader: strin
   return ok({ success: true, count: reminders.length, skipped });
 }
 
+export interface TestPushPayload {
+  v: 1;
+  test: true;
+  tag: string;
+  reminderId: '';
+  title: string;
+  body: string;
+  url: string;
+}
+
+export function buildTestPayload(now: number): TestPushPayload {
+  return {
+    v: 1,
+    test: true,
+    // Unique tag: every test is its own notification, never a silent replacement of the previous one.
+    tag: `docmind-test-${now}`,
+    reminderId: '',
+    title: 'DocuMind test alert',
+    body: 'If this popped up on your screen with a sound, your alerts are set up correctly.',
+    url: '/',
+  };
+}
+
+/**
+ * POST /api/push/test — sends ONE real push to the caller's own subscription (authenticated by subscription id + bearer
+ * token, like sync/unsubscribe) so the user can check the pop-up behaviour. Rate limited per subscription (the per-IP
+ * limiter in the route guards sits on top). Sent with the same high urgency as real reminders.
+ */
+export async function sendTestPush(deps: PushDeps, body: any, authHeader: string | undefined): Promise<ApiResult> {
+  if (!isConfigured(deps.config)) return err(503, 'Web Push is not configured on the server.');
+  const stored = await authenticate(deps, body?.subscriptionId, authHeader);
+  if (!stored) return err(401, 'Unknown subscription or bad token.');
+  if (!isAllowedPushEndpoint(stored.subscription.endpoint, endpointPolicyOf(deps.config))) {
+    await deps.store.removeSubscription(stored.id);
+    return err(410, 'This subscription is no longer valid. Turn notifications off and on again.');
+  }
+  const now = (deps.now ?? Date.now)();
+  if (!(await deps.store.claim(`test|${stored.id}`, TEST_PUSH_COOLDOWN_SECONDS))) {
+    return { status: 429, body: { success: false, error: `Please wait ${TEST_PUSH_COOLDOWN_SECONDS} seconds between test notifications.`, retryAfterSeconds: TEST_PUSH_COOLDOWN_SECONDS } };
+  }
+  const sender = deps.sender ?? createWebPushSender(deps.config);
+  try {
+    await withTimeout(
+      sender(stored.subscription, JSON.stringify(buildTestPayload(now)), {
+        ttl: TEST_PUSH_TTL_SECONDS,
+        urgency: 'high',
+        timeoutMs: deps.config.sendTimeoutMs,
+      }),
+      deps.config.sendTimeoutMs,
+    );
+  } catch (e: any) {
+    if (isGone(e)) {
+      await deps.store.removeSubscription(stored.id);
+      return err(410, 'This device is no longer subscribed. Turn notifications off and on again.');
+    }
+    await deps.store.release(`test|${stored.id}`); // nothing was delivered: let the user retry right away
+    if (e instanceof PushTimeoutError) return err(504, 'The push service did not answer in time. Try again.');
+    console.warn(`[push] test send failed for ${stored.id} (${e?.statusCode ?? e?.message ?? 'error'})`);
+    return err(502, 'The push service rejected the test notification.');
+  }
+  return ok({ success: true });
+}
+
 // ───────────────────────── dispatcher ─────────────────────────
 
 export interface DispatchSummary {
@@ -421,7 +491,7 @@ export async function dispatchDue(deps: PushDeps): Promise<DispatchSummary> {
       try {
         await withTimeout(
           sender(sub.subscription, JSON.stringify(buildPayload(ev, now, config)), {
-            ttl: 6 * 3600,
+            ttl: REMINDER_PUSH_TTL_SECONDS,
             urgency: 'high',
             topic: ev.id.replace(/[^A-Za-z0-9_-]/g, '').slice(0, 32) || undefined,
             timeoutMs: config.sendTimeoutMs,
