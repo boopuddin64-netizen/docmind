@@ -17,7 +17,7 @@ import {
 } from 'lucide-react';
 import { Reminder, ReminderCategory, UserProfile } from '../types';
 import { selfMatchLabel } from '../lib/profileMatch';
-import { downloadIcsCalendar } from '../lib/icalHelper';
+import { exportIcsCalendar } from '../lib/icalHelper';
 import { validateDateField, validateTimeField } from '../lib/dateInput';
 import { FIELD_LIMITS, clamp } from '../lib/formValidation';
 import { useEscapeKey } from '../lib/useEscapeKey';
@@ -32,6 +32,8 @@ interface ReminderDetailModalProps {
   /** Snooze the reminder's alerts for one of the six allowed durations (minutes). */
   onSnooze?: (reminderId: string, minutes: number) => void;
   userProfile?: UserProfile;
+  /** App-level toast (success / failure feedback for exports). */
+  onShowToast?: (message: string) => void;
 }
 
 export const ReminderDetailModal: React.FC<ReminderDetailModalProps> = ({
@@ -42,6 +44,7 @@ export const ReminderDetailModal: React.FC<ReminderDetailModalProps> = ({
   onUpdateReminder,
   onSnooze,
   userProfile,
+  onShowToast,
 }) => {
   const [isEditing, setIsEditing] = React.useState<boolean>(false);
   const [eventTitle, setEventTitle] = React.useState<string>(reminder?.eventTitle ?? '');
@@ -106,13 +109,11 @@ export const ReminderDetailModal: React.FC<ReminderDetailModalProps> = ({
     setIsEditing(false);
   };
 
-  const exportCalendar = () => {
+  const exportCalendar = async () => {
     if (!reminder) return;
-    if (!downloadIcsCalendar(reminder)) {
-      setErrors((p) => ({ ...p, export: 'This reminder has no valid date, so it can not be exported. Edit the date first.' }));
-    } else {
-      setErrors((p) => ({ ...p, export: undefined }));
-    }
+    const r = await exportIcsCalendar(reminder);
+    setErrors((p) => ({ ...p, export: r.ok === false && r.reason !== 'cancelled' ? r.message : undefined }));
+    onShowToast?.(r.message);
   };
 
   return (
