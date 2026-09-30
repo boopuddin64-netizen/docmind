@@ -17,7 +17,9 @@ import { applySnooze, snoozeLabel } from './lib/snooze';
 import { SecurityVaultModal } from './components/SecurityVaultModal';
 import { Header } from './components/Header';
 import { UpdateBanner } from './components/UpdateBanner';
-import { clearDraft, clearDrafts, flushPendingWrites, isDefaultSnapshot, persistableDoc, readSnapshot, writeSnapshot, type UiSnapshot } from './lib/persistedState';
+import { announceRefreshAvailable, refreshApp } from './lib/swRegister';
+import { browserFreshnessDeps, installSessionFreshness } from './lib/sessionFreshness';
+import { clearDraft, clearDrafts, flushPendingWrites, hasLiveDrafts, isDefaultSnapshot, persistableDoc, readSnapshot, writeSnapshot, type UiSnapshot } from './lib/persistedState';
 import { useFlushOnHide, useScrollMemory } from './lib/useUiState';
 import {
   NavigationTab,
@@ -233,6 +235,20 @@ export default function App() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [currentTab, activeSearchQuery, selectedDetailReminder?.id, snoozePickerId, isUploadModalOpen, isAddManualOpen, isNotificationDrawerOpen, isVaultModalOpen, isHumanReviewOpen, isDuplicateModalOpen, pendingExtractedDoc, duplicateMatch]);
   useFlushOnHide(saveUiState);
+
+  // ── Long-session freshness: quick app switches keep everything as is; after a long time away (or a very old session) the
+  //    next return does a soft refresh (applies a waiting service worker update), unless a modal / draft is open (banner then).
+  const busyRef = useRef(false);
+  busyRef.current = isUploadModalOpen || isAddManualOpen || isNotificationDrawerOpen || isVaultModalOpen || isHumanReviewOpen
+    || isDuplicateModalOpen || isDeviceAlertPopupOpen || !!selectedDetailReminder || !!snoozePickerId || !!pendingExtractedDoc;
+  const saveUiStateRef = useRef(saveUiState);
+  saveUiStateRef.current = saveUiState;
+  useEffect(() => installSessionFreshness(browserFreshnessDeps({
+    isBusy: () => busyRef.current || hasLiveDrafts(),
+    saveState: () => saveUiStateRef.current(),
+    refresh: refreshApp,
+    defer: announceRefreshAvailable,
+  })), []);
 
   const [toast, setToast] = useState<{ message: string; actionLabel?: string; onAction?: () => void } | null>(null);
   const toastTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);

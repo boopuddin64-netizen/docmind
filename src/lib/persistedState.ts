@@ -147,6 +147,20 @@ export function clearDrafts(prefix: string): void {
   } catch { /* ignore */ }
 }
 
+/** True when at least one unexpired form draft exists (pending in memory or stored). Used to hold back a refresh. */
+export function hasLiveDrafts(now: number = Date.now()): boolean {
+  if (pending.size > 0) return true;
+  const kv = storage();
+  if (!kv || typeof kv.length !== 'number' || !kv.key) return false;
+  try {
+    for (let i = 0; i < kv.length; i++) {
+      const k = kv.key(i);
+      if (k && k.startsWith(DRAFT_PREFIX) && read<unknown>(k, DRAFT_TTL_MS, now) !== undefined) return true;
+    }
+  } catch { /* ignore */ }
+  return false;
+}
+
 /** Every key this module owns (used by "Reset app data"). */
 export function listStateKeys(kv: Pick<KV, 'length' | 'key'>): string[] {
   const out: string[] = [];

@@ -1,6 +1,7 @@
 import { buildIcsContent, icsFilename, isStrictIcsDate } from './icsBuilder';
 import { DEFAULT_LEAD_MINUTES, clampLeadMinutes } from './schedule';
-import { buildGoogleCalendarUrl, buildOutlookLiveUrl, buildOutlookOfficeUrl, type CalendarLinkInput } from './calendarLinks';
+import type { CalendarLinkInput } from './calendarLinks';
+import { DEFAULT_PLATFORM, browserPlatform, launchAppWithFallback, planCalendarLaunch, type LaunchPlan, type PlatformInfo } from './calendarPlatform';
 
 /**
  * iCal (.ics) export, generated 100% on the device (works offline; the server is only a last-resort fallback).
@@ -35,16 +36,63 @@ export interface IcsExportEnv {
   canShareFile?: (file: File) => boolean;
   shareFile?: (file: File, title: string) => Promise<void>;
   saveBlob: (blob: Blob, filename: string) => void;
+  /** Opens an https page in a NEW window / tab (or the OS in-app browser). Never used for same-origin files in an iOS standalone PWA. */
   openUrl: (url: string) => void;
+  /** Detected platform. Omitted => DEFAULT_PLATFORM (plain web links only, no app schemes). */
+  platform?: PlatformInfo;
+  /** Absolute origin of the app (for share-by-link); omitted => relative URL. */
+  origin?: string;
+  /** Runs a launch plan (intent:// / app scheme with timed fallback / web). Omitted => the web fallback link is opened. */
+  launch?: (plan: LaunchPlan) => void;
 }
 
 export function browserEnv(): IcsExportEnv {
   const nav: any = typeof navigator !== 'undefined' ? navigator : {};
   const ua: string = nav.userAgent || '';
   const isMobile = /Android|iPhone|iPad|iPod/i.test(ua) || (nav.platform === 'MacIntel' && nav.maxTouchPoints > 1);
+  const platform = browserPlatform();
+  const clickLink = (url: string, newWindow: boolean) => {
+    const link = document.createElement('a');
+    link.href = url;
+    if (newWindow) { link.target = '_blank'; link.rel = 'noopener noreferrer'; }
+    link.style.display = 'none';
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+  };
+  const openUrl = (url: string) => {
+    // NOTE: window.open(..., 'noopener') always returns null, so "null => navigate" would also navigate the app away
+    // after a successful open. A programmatic <a target=_blank> click has no such ambiguity and is treated as a user gesture.
+    try { clickLink(url, true); } catch { window.location.assign(url); }
+  };
   return {
     isMobile,
+    platform,
+    origin: typeof location !== 'undefined' ? location.origin : undefined,
     online: nav.onLine !== false,
+    openUrl,
+    launch: (plan) => {
+      if (plan.mode === 'web') return openUrl(plan.url);
+      if (plan.mode === 'intent') {
+        // Same-window navigation to intent://: Chrome opens the app, or itself goes to S.browser_fallback_url.
+        try { clickLink(plan.url, false); } catch { openUrl(plan.fallbackUrl); }
+        return;
+      }
+      // iOS app scheme: no "app missing" signal exists, so watch whether the page gets hidden (= the app opened).
+      launchAppWithFallback(plan.url, plan.fallbackUrl, {
+        fire: (u) => { try { clickLink(u, false); } catch { /* the timed fallback handles it */ } },
+        fallback: openUrl,
+        isHidden: () => document.visibilityState === 'hidden',
+        subscribe: (onLeave) => {
+          const vis = () => { if (document.visibilityState === 'hidden') onLeave(); };
+          document.addEventListener('visibilitychange', vis);
+          window.addEventListener('pagehide', onLeave);
+          return () => { document.removeEventListener('visibilitychange', vis); window.removeEventListener('pagehide', onLeave); };
+        },
+        setTimer: (fn, ms) => setTimeout(fn, ms),
+        clearTimer: (t) => clearTimeout(t as ReturnType<typeof setTimeout>),
+      });
+    },
     canShareFile: typeof nav.share === 'function' && typeof nav.canShare === 'function' ? (f) => { try { return !!nav.canShare({ files: [f] }); } catch { return false; } } : undefined,
     shareFile: typeof nav.share === 'function' ? (file, title) => nav.share({ files: [file], title }) : undefined,
     saveBlob: (blob, filename) => {
@@ -58,23 +106,6 @@ export function browserEnv(): IcsExportEnv {
       link.click();
       document.body.removeChild(link);
       setTimeout(() => URL.revokeObjectURL(url), 30_000);
-    },
-    openUrl: (url) => {
-      // NOTE: window.open(..., 'noopener') always returns null, so "null => navigate" would also navigate the app away
-      // after a successful open. A programmatic <a target=_blank> click has no such ambiguity, is treated as a user
-      // gesture, and lets Android hand calendar.google.com links to the installed Google Calendar app.
-      try {
-        const link = document.createElement('a');
-        link.href = url;
-        link.target = '_blank';
-        link.rel = 'noopener noreferrer';
-        link.style.display = 'none';
-        document.body.appendChild(link);
-        link.click();
-        document.body.removeChild(link);
-      } catch {
-        window.location.assign(url);
-      }
     },
   };
 }
@@ -111,12 +142,8 @@ export function calendarLinkInput(reminder: ExportableReminder, timeZone?: strin
   };
 }
 
-export async function exportIcsCalendar(reminder: ExportableReminder, env: IcsExportEnv = browserEnv()): Promise<IcsExportResult> {
-  // Refuse to export an invalid / missing date (it would silently become "today" in the calendar).
-  if (!isStrictIcsDate(reminder.appointmentDate)) {
-    return { ok: false, reason: 'invalid-date', message: 'Can not export: this reminder has no valid date. Edit the date first.' };
-  }
-  const content = buildIcsContent({
+function icsInput(reminder: ExportableReminder) {
+  return {
     title: reminder.eventTitle,
     note: reminder.shortNote,
     location: reminder.hospitalName,
@@ -125,7 +152,15 @@ export async function exportIcsCalendar(reminder: ExportableReminder, env: IcsEx
     time: reminder.appointmentTime,
     uid: reminder.id,
     alarmMinutes: alarmMinutesFor(reminder),
-  });
+  };
+}
+
+export async function exportIcsCalendar(reminder: ExportableReminder, env: IcsExportEnv = browserEnv()): Promise<IcsExportResult> {
+  // Refuse to export an invalid / missing date (it would silently become "today" in the calendar).
+  if (!isStrictIcsDate(reminder.appointmentDate)) {
+    return { ok: false, reason: 'invalid-date', message: 'Can not export: this reminder has no valid date. Edit the date first.' };
+  }
+  const content = buildIcsContent(icsInput(reminder));
   const filename = icsFilename(reminder.eventTitle);
   const blob = new Blob([content], { type: 'text/calendar;charset=utf-8' });
 
@@ -149,7 +184,9 @@ export async function exportIcsCalendar(reminder: ExportableReminder, env: IcsEx
     // fall through to the server URL
   }
 
-  if (env.online) {
+  // Never point the iOS Home Screen app at the server .ics (same-origin => loads into the app's own web view => white screen).
+  const iosStandalone = env.platform?.os === 'ios' && env.platform.standalone;
+  if (env.online && !iosStandalone) {
     try {
       env.openUrl(serverIcsUrl(reminder));
       return { ok: true, method: 'server', filename, message: 'Opening the calendar file...' };
@@ -169,7 +206,7 @@ export async function downloadIcsCalendar(reminder: ExportableReminder): Promise
 // Export picker targets
 // ---------------------------------------------------------------------------------------------------------------------
 
-export type CalendarTarget = 'share' | 'apple' | 'google' | 'outlook' | 'outlook365' | 'ics';
+export type CalendarTarget = 'share' | 'apple' | 'google' | 'outlook' | 'outlook365' | 'device' | 'ics';
 
 export type CalendarExportResult =
   | { ok: true; target: CalendarTarget; method: 'share' | 'download' | 'server' | 'link'; message: string }
@@ -186,14 +223,77 @@ export function canShareIcsFile(env: IcsExportEnv = browserEnv()): boolean {
   }
 }
 
-function openLink(env: IcsExportEnv, url: string, target: CalendarTarget, label: string): CalendarExportResult {
+function launchLink(env: IcsExportEnv, target: 'google' | 'outlook' | 'outlook365' | 'device', input: CalendarLinkInput, label: string): CalendarExportResult {
   if (!env.online) return { ok: false, reason: 'offline', message: `You are offline. Connect to the internet to open ${label}, or download the .ics file instead.` };
   try {
-    env.openUrl(url);
-    return { ok: true, target, method: 'link', message: `Opening ${label}...` };
+    const platform = env.platform ?? DEFAULT_PLATFORM;
+    const plan = planCalendarLaunch(target, platform, input);
+    if (env.launch) env.launch(plan);
+    else env.openUrl(plan.fallbackUrl);
+    const appFirst = plan.mode !== 'web';
+    return { ok: true, target, method: 'link', message: appFirst ? `Opening ${label} app...` : `Opening ${label}...` };
   } catch {
     return { ok: false, reason: 'failed', message: `Could not open ${label}. Try "Download .ics file" instead.` };
   }
+}
+
+/**
+ * Apple Calendar. The old implementation navigated to the https /api/download-ics link. Inside the iOS Home Screen PWA that link
+ * is same-origin / in-scope, so iOS loads the text/calendar response INTO THE APP'S OWN WEB VIEW, which cannot render it: white
+ * screen with no way back. Rule now: the standalone app is never pointed at the .ics URL.
+ *   1. Web Share with the .ics File (share sheet -> "Add to Calendar")            [all iOS 15+ where canShare accepts it]
+ *   2. iOS standalone: on-device file download (<a download>, no navigation), else share the https link
+ *      iOS browser tab: open the server .ics in a NEW tab (Safari shows its native "Add to Calendar" preview)
+ *   3. anything else: the plain file export chain
+ * Every result keeps the app on screen.
+ */
+async function exportApple(reminder: ExportableReminder, env: IcsExportEnv): Promise<CalendarExportResult> {
+  const platform = env.platform ?? DEFAULT_PLATFORM;
+  const standalone = platform.os === 'ios' && platform.standalone;
+  const target: CalendarTarget = 'apple';
+
+  // 1. share sheet with the file
+  if (canShareIcsFile(env)) {
+    const r = await exportIcsCalendar(reminder, { ...env, isMobile: true, saveBlob: () => { throw new Error('share only'); }, openUrl: () => { throw new Error('share only'); } });
+    if (r.ok === true) return { ok: true, target, method: r.method, message: 'In the share sheet, tap "Add to Calendar" (or Calendar), then Add.' };
+    if (r.reason === 'cancelled' || r.reason === 'invalid-date') return r;
+    // any other failure: try the next strategy
+  }
+
+  // 1b. Some iOS versions refuse text/calendar in canShare() but accept the same bytes typed as plain text (the .ics extension
+  //     still identifies it to Calendar / Files). Only tried when the calendar type was refused.
+  if (platform.os === 'ios' && env.shareFile && env.canShareFile && !canShareIcsFile(env) && isStrictIcsDate(reminder.appointmentDate)) {
+    try {
+      const plain = new File([buildIcsContent(icsInput(reminder))], icsFilename(reminder.eventTitle), { type: 'text/plain' });
+      if (env.canShareFile(plain)) {
+        await env.shareFile(plain, reminder.eventTitle || 'Reminder');
+        return { ok: true, target, method: 'share', message: 'In the share sheet, tap "Add to Calendar" (or save to Files and open it).' };
+      }
+    } catch (e: any) {
+      if (e && e.name === 'AbortError') return { ok: false, reason: 'cancelled', message: 'Export cancelled.' };
+    }
+  }
+
+  if (!standalone && env.online) {
+    // Safari tab: a NEW tab keeps this page alive. (Never navigates the current page.)
+    try {
+      env.openUrl(absolute(serverIcsUrl(reminder), env));
+      return { ok: true, target, method: 'server', message: 'Opening the event in a new tab: tap "Add to Calendar" when it appears.' };
+    } catch { /* fall through */ }
+  }
+
+  // 2/3. on-device file (no navigation), which keeps the app visible in the standalone PWA
+  const r = await exportIcsCalendar(reminder, { ...env, isMobile: false, shareFile: undefined, canShareFile: undefined, openUrl: () => { throw new Error('never navigate'); } });
+  if (r.ok === true) {
+    return { ok: true, target, method: r.method, message: standalone
+      ? `Calendar file "${r.filename}" saved. Open it from Files or Downloads and tap "Add to Calendar". Tip: Google Calendar or Outlook also work from this menu.`
+      : r.message };
+  }
+  return r;
+}
+
+function absolute(path: string, env: IcsExportEnv): string {
+  return env.origin && path.startsWith('/') ? env.origin + path : path;
 }
 
 /**
@@ -212,23 +312,15 @@ export async function exportToCalendar(
   const input = calendarLinkInput(reminder, timeZone);
   switch (target) {
     case 'google':
-      return openLink(env, buildGoogleCalendarUrl(input), 'google', 'Google Calendar');
+      return launchLink(env, 'google', input, 'Google Calendar');
     case 'outlook':
-      return openLink(env, buildOutlookLiveUrl(input), 'outlook', 'Outlook');
+      return launchLink(env, 'outlook', input, 'Outlook');
     case 'outlook365':
-      return openLink(env, buildOutlookOfficeUrl(input), 'outlook365', 'Outlook (work or school)');
-    case 'apple': {
-      // https link to the server-built .ics (Content-Type: text/calendar, inline). iOS Safari shows "Add to Calendar" for it.
-      // webcal:// is deliberately NOT used: iOS treats it as a calendar SUBSCRIPTION (adds a whole subscribed calendar and
-      // needs a feed that stays online), not a one-off event, and it would drop nothing extra we need.
-      if (env.online) {
-        const r = openLink(env, serverIcsUrl(reminder), 'apple', 'Apple Calendar');
-        if (r.ok) return { ...r, message: 'Opening the event: tap "Add to Calendar" when it appears.' };
-      }
-      // offline / could not open: hand the on-device file over instead (share sheet -> Calendar, or download)
-      const fallback = await exportIcsCalendar(reminder, env);
-      return fallback.ok === false ? fallback : { ok: true, target, method: fallback.method, message: fallback.message };
-    }
+      return launchLink(env, 'outlook365', input, 'Outlook (work or school)');
+    case 'device':
+      return launchLink(env, 'device', input, 'your calendar');
+    case 'apple':
+      return exportApple(reminder, env);
     case 'share': {
       if (!canShareIcsFile(env)) {
         return { ok: false, reason: 'unsupported', message: 'Sharing files is not supported in this browser. Choose another option or download the .ics file.' };
