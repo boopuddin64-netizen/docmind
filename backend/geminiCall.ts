@@ -10,14 +10,62 @@
  * Strategy: walk a chain of models. Overloaded / timed-out / network errors are retried once on the same model after a short
  * backoff, then the next model is tried; a quota (429) error moves on to the next model right away (quota is per model);
  * a missing model (404) is skipped; auth / bad-request errors stop immediately. Everything is bounded by a total time budget
- * and a per-attempt timeout, so the function always answers well before the client gives up.
+ * and a per-attempt timeout, so the function always answers well before the client gives up. The chain is configurable through the
+ * optional GEMINI_MODELS env var; the number of calls is capped (see DEFAULT_MAX_ATTEMPTS).
  */
 
-/** Newest stable Flash first. Each has its own capacity and its own free-tier quota. */
-export const DEFAULT_SCAN_MODELS: readonly string[] = ["gemini-3.6-flash", "gemini-3.5-flash-lite", "gemini-3.8-flash", "gemini-3.7-flash"];
+/**
+ * Default chain, best quality / reliability first. Each model has its own capacity and its own free-tier quota.
+ * The first four are the original chain. The last four were added after probing the models API with the production key
+ * (2026-09-30, generateContent + our JSON responseSchema + image input): gemini-3.5-flash, gemini-3-flash-preview,
+ * gemini-flash-lite-latest and gemini-3.1-flash-lite all returned a schema-valid answer. Rejected / skipped: gemini-2.5-* (404, no
+ * longer available to new users), gemini-3.1-pro-preview (429, no free-tier quota), gemma-4-* (schema OK but ~30 s, over the
+ * per-attempt timeout).
+ */
+export const DEFAULT_SCAN_MODELS: readonly string[] = [
+  "gemini-3.6-flash",
+  "gemini-3.5-flash-lite",
+  "gemini-3.8-flash",
+  "gemini-3.7-flash",
+  "gemini-3.5-flash",
+  "gemini-3-flash-preview",
+  "gemini-flash-lite-latest",
+  "gemini-3.1-flash-lite",
+];
+
+/** Hard cap on the chain length, however GEMINI_MODELS is set. */
+export const MAX_SCAN_MODELS = 10;
+/** Hard cap on model calls per scan (the time budget usually stops the walk earlier). */
+export const DEFAULT_MAX_ATTEMPTS = 10;
+/** The same-model retry is only used while fewer than this many attempts were made, so later models still get a turn. */
+const SAME_MODEL_RETRY_UNTIL_ATTEMPT = 4;
+
+/**
+ * Parses the optional GEMINI_MODELS env var (comma-separated, e.g. "gemini-3.6-flash, gemini-3.5-flash"). Accepts an optional
+ * "models/" prefix, ignores blanks, invalid names and duplicates, and keeps at most MAX_SCAN_MODELS. An unset / empty / fully invalid
+ * value gives the default chain.
+ */
+export function parseModelList(raw: string | undefined | null): string[] {
+  if (!raw) return [...DEFAULT_SCAN_MODELS];
+  const seen = new Set<string>();
+  for (const part of raw.split(",")) {
+    const name = part.trim().replace(/^models\//i, "");
+    if (/^[A-Za-z0-9][A-Za-z0-9._-]{0,80}$/.test(name)) seen.add(name);
+  }
+  const list = [...seen].slice(0, MAX_SCAN_MODELS);
+  return list.length > 0 ? list : [...DEFAULT_SCAN_MODELS];
+}
+
+/** The chain in effect: GEMINI_MODELS when set, otherwise DEFAULT_SCAN_MODELS. */
+export function resolveScanModels(env: Record<string, string | undefined> = process.env): string[] {
+  return parseModelList(env.GEMINI_MODELS);
+}
 
 export interface GeminiRetryOptions {
+  /** Model chain; default = GEMINI_MODELS env (comma-separated) or DEFAULT_SCAN_MODELS. */
   models?: readonly string[];
+  /** Max model calls for the whole scan (default 10). */
+  maxAttempts?: number;
   /** Whole-call budget in ms (default 45 s; vercel.json allows the function 60 s and the client waits 75 s). */
   budgetMs?: number;
   /** One model call is aborted after this long (default 20 s). */
@@ -91,7 +139,8 @@ export async function generateWithFallback(
   request: GenerateRequest,
   opts: GeminiRetryOptions = {},
 ): Promise<{ data: any; model: string; attempts: number }> {
-  const models = opts.models && opts.models.length > 0 ? opts.models : DEFAULT_SCAN_MODELS;
+  const models = opts.models && opts.models.length > 0 ? opts.models : resolveScanModels();
+  const maxAttempts = opts.maxAttempts ?? DEFAULT_MAX_ATTEMPTS;
   const now = opts.now ?? Date.now;
   const sleep = opts.sleep ?? ((ms: number) => new Promise<void>((r) => setTimeout(r, ms)));
   const budget = opts.budgetMs ?? 45_000;
@@ -127,7 +176,7 @@ export async function generateWithFallback(
 
   outer: for (const model of models) {
     for (let tryNo = 0; tryNo < 2; tryNo++) {
-      if (attempts > 0 && remaining() < minAttempt) break outer;
+      if (attempts > 0 && (remaining() < minAttempt || attempts >= maxAttempts)) break outer;
       attempts++;
       try {
         const data = await runOnce(model);
@@ -150,7 +199,7 @@ export async function generateWithFallback(
         }
         if (info.kind === "model-missing" || info.kind === "bad-output") break;
         // overloaded / timeout / network: one more try on the same model after a short backoff, then the next model.
-        if (tryNo === 0 && remaining() > backoff + minAttempt) await sleep(backoff + Math.floor(Math.random() * 300));
+        if (tryNo === 0 && attempts < SAME_MODEL_RETRY_UNTIL_ATTEMPT && remaining() > backoff + minAttempt) await sleep(backoff + Math.floor(Math.random() * 300));
         else break;
       }
     }

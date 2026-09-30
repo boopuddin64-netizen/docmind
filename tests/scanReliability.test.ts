@@ -5,7 +5,7 @@ import type { Server } from 'node:http';
 import type express from 'express';
 import { createApiApp } from '../backend/apiApp';
 import { MemoryStore } from '../push-server/store';
-import { classifyGeminiError, generateWithFallback, GeminiCallError, DEFAULT_SCAN_MODELS } from '../backend/geminiCall';
+import { classifyGeminiError, generateWithFallback, GeminiCallError, DEFAULT_SCAN_MODELS, MAX_SCAN_MODELS, parseModelList, resolveScanModels } from '../backend/geminiCall';
 import { ScanError, classifyScanFailure, isTransientScanError, readScanResponse, requestScan } from '../src/lib/scanErrors';
 import { beginScan, isScanInFlight, resetScanActivity } from '../src/lib/scanActivity';
 import { decideFreshness, installSessionFreshness, HIDDEN_REFRESH_AFTER_MS } from '../src/lib/sessionFreshness';
@@ -125,6 +125,62 @@ test('the total time budget stops further attempts (function always answers befo
   const e: any = await generateWithFallback(s.ai, req, { now: () => clock, sleep: async (ms) => { clock += 30_000 + ms; }, budgetMs: 45_000, minAttemptMs: 6_000 }).catch((x) => x);
   assert.equal(e.failure, 'busy');
   assert.ok(s.models.length <= 3 && s.models.length < 8, `attempts ${s.models.length} (would be 8 without the budget)`);
+});
+
+test('default chain: 8 unique models, original four first, no retired 2.5 models', () => {
+  assert.equal(DEFAULT_SCAN_MODELS.length, 8);
+  assert.equal(new Set(DEFAULT_SCAN_MODELS).size, 8);
+  assert.deepEqual(DEFAULT_SCAN_MODELS.slice(0, 4), ['gemini-3.6-flash', 'gemini-3.5-flash-lite', 'gemini-3.8-flash', 'gemini-3.7-flash']);
+  assert.ok(DEFAULT_SCAN_MODELS.every((m) => /^gemini-/.test(m) && !m.includes('2.5')));
+});
+
+test('GEMINI_MODELS: comma list is trimmed / de-duplicated / "models/" prefix stripped; unset, empty or invalid → default chain; capped', () => {
+  assert.deepEqual(parseModelList(' gemini-a , models/gemini-b,,gemini-a,bad name!,$x '), ['gemini-a', 'gemini-b']);
+  assert.deepEqual(parseModelList(undefined), [...DEFAULT_SCAN_MODELS]);
+  assert.deepEqual(parseModelList(''), [...DEFAULT_SCAN_MODELS]);
+  assert.deepEqual(parseModelList(' , ;; '), [...DEFAULT_SCAN_MODELS]);
+  assert.equal(parseModelList(Array.from({ length: 30 }, (_, i) => `m${i}`).join(',')).length, MAX_SCAN_MODELS);
+  assert.deepEqual(resolveScanModels({ GEMINI_MODELS: 'x1,x2' }), ['x1', 'x2']);
+  assert.deepEqual(resolveScanModels({}), [...DEFAULT_SCAN_MODELS]);
+});
+
+test('generateWithFallback uses the GEMINI_MODELS env chain when no models option is given', async () => {
+  const prev = process.env.GEMINI_MODELS;
+  process.env.GEMINI_MODELS = 'env-one,env-two';
+  try {
+    const s = script([quota('40s'), 'ok']);
+    const r = await generateWithFallback(s.ai, req, { sleep: noSleep });
+    assert.deepEqual(s.models, ['env-one', 'env-two']);
+    assert.equal(r.model, 'env-two');
+    const explicit = script(['ok']);
+    assert.equal((await generateWithFallback(explicit.ai, req, { models: ['explicit'], sleep: noSleep })).model, 'explicit');
+  } finally {
+    if (prev === undefined) delete process.env.GEMINI_MODELS; else process.env.GEMINI_MODELS = prev;
+  }
+});
+
+test('missing (404) and quota (429) models are skipped instantly all the way down the long default chain', async () => {
+  const s = script([api(404, 'gone'), quota('40s'), api(404, 'gone'), quota('40s'), api(404, 'gone'), quota('40s'), api(404, 'gone'), 'ok']);
+  const r = await generateWithFallback(s.ai, req, { sleep: noSleep });
+  assert.equal(r.model, DEFAULT_SCAN_MODELS[7]);
+  assert.deepEqual(s.models, [...DEFAULT_SCAN_MODELS]);
+});
+
+test('overloaded everywhere: total attempts are capped (same-model retry only for the first models) and the budget still holds', async () => {
+  const s = script([overloaded()]);
+  const e: any = await generateWithFallback(s.ai, req, { sleep: noSleep }).catch((x) => x);
+  assert.equal(e.failure, 'busy');
+  assert.equal(s.models.length, 10);
+  assert.deepEqual([...new Set(s.models)], [...DEFAULT_SCAN_MODELS]);
+  const c = script([overloaded()]);
+  await generateWithFallback(c.ai, req, { sleep: noSleep, maxAttempts: 3 }).catch(() => {});
+  assert.equal(c.models.length, 3);
+  // worst case with real timeouts: every attempt burns the 20 s limit, the 45 s budget stops the walk after a few of them
+  let clock = 0;
+  const h = { ai: { models: { generateContent: async () => { clock += 20_000; throw Object.assign(new Error('t'), { name: 'AbortError' }); } } } } as any;
+  const e2: any = await generateWithFallback(h, req, { now: () => clock, sleep: async (ms) => { clock += ms; } }).catch((x) => x);
+  assert.equal(e2.failure, 'busy');
+  assert.ok(clock <= 45_000 + 20_000, `virtual time ${clock}`);
 });
 
 // ───────── server: HTTP route ─────────
