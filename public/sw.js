@@ -13,8 +13,14 @@ const ASSETS_TO_CACHE = [
   "/docmind_logo.jpg"
 ];
 
+// Update policy: a new version installs in the background and WAITS. It takes over on the next cold start (all tabs / the
+// installed app closed) or when the page asks for it (the user tapped "Refresh" in the update banner -> SKIP_WAITING).
+// There is deliberately NO automatic skipWaiting() here: it would swap caches and code under a page that is in use.
+self.addEventListener("message", (event) => {
+  if (event.data && event.data.type === "SKIP_WAITING") self.skipWaiting();
+});
+
 self.addEventListener("install", (event) => {
-  self.skipWaiting();
   event.waitUntil(
     caches.open(CACHE_NAME).then(async (cache) => {
       // Add one by one so a single missing asset does not abort the whole precache.

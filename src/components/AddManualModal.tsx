@@ -5,6 +5,8 @@ import { selfMatchLabel } from '../lib/profileMatch';
 import { validateDateField, validateTimeField } from '../lib/dateInput';
 import { FIELD_LIMITS, clamp } from '../lib/formValidation';
 import { useEscapeKey } from '../lib/useEscapeKey';
+import { clearDraft, loadDraft, pickStrings } from '../lib/persistedState';
+import { useDraftSaver } from '../lib/useUiState';
 
 interface AddManualModalProps {
   isOpen: boolean;
@@ -18,6 +20,7 @@ const FIELD =
   'w-full bg-[#f2f4f5] dark:bg-[#07131e] border border-[#e1e3e4] dark:border-sky-900/50 rounded-xl px-3.5 py-2.5 text-xs text-[#191c1d] dark:text-white placeholder:text-[#707975] dark:placeholder:text-sky-300/50 focus:outline-none focus:ring-2 focus:ring-[#0284c7] dark:focus:ring-sky-400 mt-1';
 const FIELD_ERR = ' border-rose-500 dark:border-rose-400';
 
+const DRAFT_FIELDS = ['eventTitle', 'hospitalName', 'patientName', 'appointmentDate', 'appointmentTime', 'shortNote', 'category'] as const;
 const todayDdMmYyyy = () => new Date().toLocaleDateString('en-GB');
 
 export const AddManualModal: React.FC<AddManualModalProps> = ({
@@ -26,16 +29,21 @@ export const AddManualModal: React.FC<AddManualModalProps> = ({
   userProfile,
   onAddReminder,
 }) => {
-  const [eventTitle, setEventTitle] = useState('');
-  const [hospitalName, setHospitalName] = useState('');
-  const [patientName, setPatientName] = useState(userProfile.name);
-  const [appointmentDate, setAppointmentDate] = useState(todayDdMmYyyy());
-  const [appointmentTime, setAppointmentTime] = useState('08:00 AM');
-  const [shortNote, setShortNote] = useState('');
-  const [category, setCategory] = useState<ReminderCategory>('General');
+  // A half-typed reminder survives the app being backgrounded / discarded (see lib/persistedState.ts).
+  const [draft] = useState(() => pickStrings(loadDraft('addManual'), DRAFT_FIELDS));
+  const [eventTitle, setEventTitle] = useState(draft.eventTitle ?? '');
+  const [hospitalName, setHospitalName] = useState(draft.hospitalName ?? '');
+  const [patientName, setPatientName] = useState(draft.patientName ?? userProfile.name);
+  const [appointmentDate, setAppointmentDate] = useState(draft.appointmentDate ?? todayDdMmYyyy());
+  const [appointmentTime, setAppointmentTime] = useState(draft.appointmentTime ?? '08:00 AM');
+  const [shortNote, setShortNote] = useState(draft.shortNote ?? '');
+  const [category, setCategory] = useState<ReminderCategory>((draft.category as ReminderCategory) ?? 'General');
   const [errors, setErrors] = useState<{ date?: string; time?: string }>({});
 
   useEscapeKey(isOpen, onClose);
+
+  const dirty = !!(eventTitle || hospitalName || shortNote) || appointmentTime !== '08:00 AM' || appointmentDate !== todayDdMmYyyy() || category !== 'General' || patientName !== userProfile.name;
+  useDraftSaver('addManual', { eventTitle, hospitalName, patientName, appointmentDate, appointmentTime, shortNote, category }, dirty);
 
   if (!isOpen) return null;
 
@@ -71,6 +79,10 @@ export const AddManualModal: React.FC<AddManualModalProps> = ({
     };
 
     onAddReminder(newReminder);
+    // Saved: the next "Add" starts from a clean form and the stored draft goes away.
+    setEventTitle(''); setHospitalName(''); setPatientName(userProfile.name); setAppointmentDate(todayDdMmYyyy());
+    setAppointmentTime('08:00 AM'); setShortNote(''); setCategory('General'); setErrors({});
+    clearDraft('addManual');
     onClose();
   };
 

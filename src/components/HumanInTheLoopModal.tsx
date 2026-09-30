@@ -19,6 +19,8 @@ import {
   Eye
 } from 'lucide-react';
 import { useEscapeKey } from '../lib/useEscapeKey';
+import { clearDraft, docSignature, loadDraft, mergeItems, packItems } from '../lib/persistedState';
+import { useDraftSaver } from '../lib/useUiState';
 
 interface HumanInTheLoopModalProps {
   isOpen: boolean;
@@ -38,8 +40,10 @@ export const HumanInTheLoopModal: React.FC<HumanInTheLoopModalProps> = ({
     ? extractedData.extractedItems
     : [extractedData];
 
-  const [items, setItems] = useState<ExtractedDocData[]>(initialItems);
-  const [selectedIndex, setSelectedIndex] = useState<number>(0);
+  const sig = docSignature(initialItems);
+  const restoredDraft = useState(() => mergeItems(initialItems, loadDraft('reviewEdit', sig)))[0];
+  const [items, setItems] = useState<ExtractedDocData[]>(restoredDraft?.items ?? initialItems);
+  const [selectedIndex, setSelectedIndex] = useState<number>(restoredDraft?.sel ?? 0);
   const [zoomLevel, setZoomLevel] = useState<number>(100);
   const [imageFilter, setImageFilter] = useState<'normal' | 'contrast' | 'grayscale' | 'invert'>('normal');
 
@@ -113,8 +117,12 @@ export const HumanInTheLoopModal: React.FC<HumanInTheLoopModalProps> = ({
       ...fixed[0],
       extractedItems: fixed,
     };
+    clearDraft('reviewEdit');
     onConfirm(verified);
   };
+
+  const reviewDirty = JSON.stringify(packItems(items, 0).items) !== JSON.stringify(packItems(initialItems, 0).items);
+  useDraftSaver('reviewEdit', packItems(items, selectedIndex), reviewDirty, sig);
 
   if (!isOpen) return null;
 

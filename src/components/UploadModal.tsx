@@ -17,6 +17,8 @@ import { ScanError, downscaleImage, readScanResponse } from '../lib/scanClient';
 import { PayloadTooLargeError, fitImageToBudget } from '../lib/largeFile';
 import { PrepareError, prepareLargeFile, type PreparedScan } from '../lib/prepareUpload';
 import { useEscapeKey } from '../lib/useEscapeKey';
+import { loadDraft, pickStrings } from '../lib/persistedState';
+import { useDraftSaver } from '../lib/useUiState';
 import { FILE_INPUT_ACCEPT, checkUploadFile, toDataUrl } from '../lib/uploadFormats';
 import { LARGE_FILE_THRESHOLD_BYTES } from '../lib/largeFile';
 
@@ -44,7 +46,7 @@ export const UploadModal: React.FC<UploadModalProps> = ({
 }) => {
   const [isScanning, setIsScanning] = useState(false);
   const [dragActive, setDragActive] = useState(false);
-  const [inputText, setInputText] = useState('');
+  const [inputText, setInputText] = useState(() => pickStrings(loadDraft('uploadText'), ['t'] as const, 2000).t ?? '');
   const [preprocessedStats, setPreprocessedStats] = useState<string | null>(null);
   const [scanError, setScanError] = useState<string | null>(null);
   const [scanStatus, setScanStatus] = useState<string | null>(null);
@@ -52,6 +54,7 @@ export const UploadModal: React.FC<UploadModalProps> = ({
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   useEscapeKey(isOpen, onClose);
+  useDraftSaver('uploadText', { t: inputText }, inputText.trim().length > 0);
 
   if (!isOpen) return null;
 
@@ -104,6 +107,7 @@ export const UploadModal: React.FC<UploadModalProps> = ({
       });
 
       const data = await readScanResponse(response);
+      setInputText('');
       onExtracted({
         ...data,
         // Images (and the first page of a scanned PDF) can be previewed as <img>; other formats fall back to the extracted-text preview.
