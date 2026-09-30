@@ -14,8 +14,14 @@ import {
 import { ExtractedDocData, UserProfile } from '../types';
 import { preprocessDocumentImage } from '../lib/preprocessor';
 import { ScanError, downscaleImage, readScanResponse } from '../lib/scanClient';
+import { PayloadTooLargeError, fitImageToBudget } from '../lib/largeFile';
+import { PrepareError, prepareLargeFile, type PreparedScan } from '../lib/prepareUpload';
 import { useEscapeKey } from '../lib/useEscapeKey';
 import { FILE_INPUT_ACCEPT, checkUploadFile, toDataUrl } from '../lib/uploadFormats';
+import { LARGE_FILE_THRESHOLD_BYTES } from '../lib/largeFile';
+
+/** What one scan needs. `pageImages` + `notice` come from large-file preparation in the browser. */
+type ScanPayload = Pick<PreparedScan, 'documentText' | 'imageBase64' | 'mimeType' | 'pageImages' | 'notice' | 'previewUrl'>;
 
 interface UploadModalProps {
   isOpen: boolean;
@@ -23,6 +29,8 @@ interface UploadModalProps {
   onExtracted: (data: ExtractedDocData) => void;
   /** Opens the manual-entry form (offered when a scan fails). */
   onAddManually: () => void;
+  /** Optional heads-up shown after a successful scan (e.g. only the first pages of a large scanned PDF were read). */
+  onNotice?: (message: string) => void;
   userProfile: UserProfile;
 }
 
@@ -31,6 +39,7 @@ export const UploadModal: React.FC<UploadModalProps> = ({
   onClose,
   onExtracted,
   onAddManually,
+  onNotice,
   userProfile,
 }) => {
   const [isScanning, setIsScanning] = useState(false);
@@ -38,20 +47,18 @@ export const UploadModal: React.FC<UploadModalProps> = ({
   const [inputText, setInputText] = useState('');
   const [preprocessedStats, setPreprocessedStats] = useState<string | null>(null);
   const [scanError, setScanError] = useState<string | null>(null);
-  const lastPayloadRef = useRef<{ documentText?: string; imageBase64?: string; mimeType?: string } | null>(null);
+  const [scanStatus, setScanStatus] = useState<string | null>(null);
+  const lastPayloadRef = useRef<ScanPayload | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   useEscapeKey(isOpen, onClose);
 
   if (!isOpen) return null;
 
-  const processScan = async (payload: {
-    documentText?: string;
-    imageBase64?: string;
-    mimeType?: string;
-  }) => {
+  const processScan = async (payload: ScanPayload) => {
     lastPayloadRef.current = payload;
     setScanError(null);
+    setScanStatus(null);
     setIsScanning(true);
 
     try {
@@ -73,11 +80,12 @@ export const UploadModal: React.FC<UploadModalProps> = ({
         } catch (e) {
           console.warn('Preprocessor skipped:', e);
         }
-        // Downscale so phone photos stay far below the 4.5 MB Vercel request-body limit. A corrupt image fails here.
+        // Downscale so phone photos (10+ MB) stay far below the 4.5 MB Vercel request-body limit. A corrupt image fails here.
         try {
-          finalBase64 = await downscaleImage(finalBase64 as string);
+          finalBase64 = await fitImageToBudget((o) => downscaleImage(finalBase64 as string, o.maxDimension, o.quality));
           mimeType = 'image/jpeg';
         } catch (e) {
+          if (e instanceof PayloadTooLargeError) throw new ScanError(e.message);
           throw new ScanError('That image looks invalid or corrupt. Please choose another photo.');
         }
       }
@@ -89,6 +97,7 @@ export const UploadModal: React.FC<UploadModalProps> = ({
           documentText: payload.documentText,
           imageBase64: finalBase64,
           mimeType,
+          pageImages: payload.pageImages,
           userName: userProfile.name,
           familyMembers: userProfile.familyMembers.map((f) => ({ name: f.name })),
         }),
@@ -97,10 +106,12 @@ export const UploadModal: React.FC<UploadModalProps> = ({
       const data = await readScanResponse(response);
       onExtracted({
         ...data,
-        // Only images can be previewed as <img>; other formats fall back to the extracted-text preview.
-        documentUrl: (isImage && finalBase64) || data.documentUrl,
+        // Images (and the first page of a scanned PDF) can be previewed as <img>; other formats fall back to the extracted-text preview.
+        documentUrl: (isImage && finalBase64) || payload.previewUrl || data.documentUrl,
       });
+      if (payload.notice) onNotice?.(payload.notice);
       setIsScanning(false);
+      setScanStatus(null);
       onClose();
     } catch (err) {
       console.error('Scan failed:', err);
@@ -110,15 +121,39 @@ export const UploadModal: React.FC<UploadModalProps> = ({
           : 'Could not reach the scanner. Check your connection and try again.',
       );
       setIsScanning(false); // stay open: honest error state with Retry / Add manually
+      setScanStatus(null);
     }
   };
 
-  const handleFileUpload = (file: File) => {
+  const handleFileUpload = async (file: File) => {
     const check = checkUploadFile(file);
     if ('error' in check) {
       setScanError(check.error);
       return;
     }
+
+    // Large PDF / Word / Excel / CSV / TXT: read it here in the browser and upload only text (or a few page images).
+    if (check.kind !== 'image' && file.size > LARGE_FILE_THRESHOLD_BYTES) {
+      lastPayloadRef.current = null;
+      setScanError(null);
+      setIsScanning(true);
+      setScanStatus('Reading this large file on your device first…');
+      try {
+        const prepared = await prepareLargeFile(file, { kind: check.kind, mime: check.mime });
+        if (prepared) {
+          setScanStatus(null);
+          await processScan(prepared);
+          return;
+        }
+      } catch (err) {
+        console.error('Large file preparation failed:', err);
+        setScanError(err instanceof PrepareError ? err.message : 'That file could not be read. Please choose another one.');
+        setIsScanning(false);
+        setScanStatus(null);
+        return;
+      }
+    }
+
     const reader = new FileReader();
     reader.onerror = () => setScanError('That file could not be read. Please choose another one.');
     reader.onload = (e) => {
@@ -186,6 +221,9 @@ export const UploadModal: React.FC<UploadModalProps> = ({
               <p className="text-xs text-[#707975] dark:text-sky-300/80 mt-1 max-w-xs">
                 Extracting recipient, due dates, action items, and issuer notes with Gemini AI.
               </p>
+              {scanStatus && (
+                <p className="text-xs font-semibold text-[#0284c7] dark:text-sky-300 mt-2 max-w-xs" role="status" id="scan-status">{scanStatus}</p>
+              )}
             </div>
           </div>
         ) : scanError ? (
@@ -267,7 +305,7 @@ export const UploadModal: React.FC<UploadModalProps> = ({
                 Click or drag & drop an image or document
               </p>
               <p className="text-xs text-[#707975] dark:text-sky-300/70 mt-1">
-                Supports JPG, PNG, WebP, PDF, Word, Excel, CSV and TXT (up to 3 MB for documents)
+                Supports JPG, PNG, WebP, PDF, Word, Excel, CSV and TXT (large files are read on your device, up to 50 MB)
               </p>
             </div>
 

@@ -42,9 +42,13 @@ export const FILE_INPUT_ACCEPT = ['image/*', ...UPLOAD_FORMATS.filter((f) => f.k
 
 /**
  * Largest raw file (bytes) we upload as-is. Vercel rejects request bodies above ~4.5 MB and base64 adds a third,
- * so 3 MB of file becomes ~4 MB of base64 (see MAX_IMAGE_BASE64_CHARS on the server).
+ * so 3 MB of file becomes ~4 MB of base64 (see MAX_IMAGE_BASE64_CHARS on the server). Bigger files are handled in the
+ * browser first (see largeFile.ts): text is extracted, scanned PDFs become a few page images, photos are downscaled.
  */
 export const MAX_UPLOAD_FILE_BYTES = 3_000_000;
+
+/** Hard client-side limit for ANY file (bytes). Bigger files are refused with a friendly message. */
+export const MAX_HARD_FILE_BYTES = 50_000_000;
 
 export const SUPPORTED_FORMATS_TEXT = 'JPG, PNG, WebP, PDF, Word (.doc/.docx), Excel (.xls/.xlsx), CSV or TXT';
 
@@ -71,16 +75,18 @@ export type UploadCheck =
   | { ok: true; mime: string; kind: UploadKind }
   | { ok: false; error: string };
 
-/** Pre-flight check in the browser: supported type and small enough to survive the request-body limit. */
+/**
+ * Pre-flight check in the browser: supported type, not empty and under the hard limit. Files above
+ * MAX_UPLOAD_FILE_BYTES are NOT rejected here; largeFile.ts decides how to shrink them.
+ */
 export function checkUploadFile(file: { name: string; type?: string; size: number }): UploadCheck {
   const mime = resolveUploadMime(file);
   if (!mime) return { ok: false, error: `That file type is not supported. Please choose ${SUPPORTED_FORMATS_TEXT}.` };
   const kind = kindOfMime(mime)!;
   if (!(file.size > 0)) return { ok: false, error: 'That file is empty. Please choose another one.' };
-  // Images are downscaled in the browser first, so only other formats are size-limited up front.
-  if (kind !== 'image' && file.size > MAX_UPLOAD_FILE_BYTES) {
-    const mb = (MAX_UPLOAD_FILE_BYTES / 1_000_000).toFixed(0);
-    return { ok: false, error: `That file is too large (limit ${mb} MB for documents). Try a smaller file, or export just the pages you need.` };
+  if (file.size > MAX_HARD_FILE_BYTES) {
+    const mb = (MAX_HARD_FILE_BYTES / 1_000_000).toFixed(0);
+    return { ok: false, error: `That file is too large (limit ${mb} MB). Try a smaller file, or export just the pages you need.` };
   }
   return { ok: true, mime, kind };
 }

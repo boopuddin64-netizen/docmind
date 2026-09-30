@@ -38,8 +38,11 @@ export interface ApiAppOptions {
   now?: () => number;
 }
 
-/** Largest JSON body the generic parser accepts: a 4 MB base64 image plus overhead (Vercel itself caps bodies at 4.5 MB). */
-const JSON_BODY_LIMIT = "5mb";
+/**
+ * Largest JSON body the generic parser accepts (bytes). Images are capped at 4,000,000 base64 chars in total and text at
+ * 60,000 chars, so real requests stay well below this; Vercel itself rejects bodies above 4.5 MB.
+ */
+const JSON_BODY_LIMIT = 4_500_000;
 
 export function createApiApp(pushDeps?: PushDeps, opts: ApiAppOptions = {}) {
   const router = express();
@@ -96,9 +99,12 @@ export function createApiApp(pushDeps?: PushDeps, opts: ApiAppOptions = {}) {
     if ("error" in validated) {
       return res.status(validated.status).json({ success: false, error: validated.error });
     }
-    const { imageBase64, mimeType, userName, familyNames } = validated.value;
+    const { imageBase64, mimeType, pageImages, userName, familyNames } = validated.value;
     const documentText = validated.value.documentText;
     let promptContext = documentText;
+    if (pageImages.length > 0) {
+      promptContext += `\n(The ${pageImages.length} attached image${pageImages.length === 1 ? " is" : "s are"} the first page${pageImages.length === 1 ? "" : "s"}, in reading order, of one scanned document.)`;
+    }
     let inlineBase64 = imageBase64;
 
     try {
@@ -137,6 +143,8 @@ export function createApiApp(pushDeps?: PushDeps, opts: ApiAppOptions = {}) {
         if (inlineBase64) {
           parts.push({ inlineData: { mimeType, data: inlineBase64 } });
         }
+        // A scanned PDF read in the browser arrives as JPEG pages of one document, in reading order.
+        for (const page of pageImages) parts.push({ inlineData: { mimeType: "image/jpeg", data: page } });
 
         const promptText = `You are an expert AI document scanner and life reminder manager for DocuMind app.
 Extract ALL appointments, assignments, duties, or reminders from this document (bills, contracts, vehicle notices, meeting/talk schedules, duty rosters, prescriptions, letters, invoices, work tasks) into structured JSON.

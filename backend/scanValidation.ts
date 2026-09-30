@@ -7,7 +7,13 @@ import { SUPPORTED_MIME_TYPES, DOCX_MIME, DOC_MIME, XLSX_MIME, XLS_MIME } from '
 /** Max size of the base64 payload (chars). Vercel rejects bodies above 4.5 MB anyway; stay safely under it. */
 export const MAX_IMAGE_BASE64_CHARS = 4_000_000;
 export const TOO_LARGE_MESSAGE = 'That file is too large to upload (limit about 3 MB). Please use a smaller file.';
-export const MAX_TEXT_CHARS = 20_000;
+/**
+ * documentText: a pasted note, a file name, or (for large files) text the browser extracted itself, so it matches the
+ * browser's cap (MAX_CLIENT_TEXT_CHARS = 60,000).
+ */
+export const MAX_TEXT_CHARS = 60_000;
+/** Scanned PDFs arrive as several page images (JPEG); at most this many per request. */
+export const MAX_PAGE_IMAGES = 8;
 export const MAX_NAME_CHARS = 200;
 export const MAX_FAMILY_MEMBERS = 50;
 /** Images and PDF (sent to the model inline) plus Word / Excel / CSV / TXT (turned into text on the server). */
@@ -18,6 +24,8 @@ export interface ScanInput {
   /** Raw base64 (any "data:...;base64," prefix removed); empty string when no image was supplied. */
   imageBase64: string;
   mimeType: string;
+  /** Raw base64 JPEG pages of one scanned document (empty array when none). Counted against MAX_IMAGE_BASE64_CHARS together with imageBase64. */
+  pageImages: string[];
   userName: string;
   /** Registered profile names (family members) as plain strings. */
   familyNames: string[];
@@ -113,7 +121,26 @@ export function validateScanRequest(body: unknown): ScanValidation {
     if (imageBase64 && !looksLikeFileType(imageBase64, mimeType)) return bad(CORRUPT_FILE_MESSAGE);
   }
 
-  if (!imageBase64 && !documentText.trim()) return bad('Provide a non-empty image or document text to scan.');
+  const pageImages: string[] = [];
+  if (body.pageImages !== undefined && body.pageImages !== null) {
+    if (!Array.isArray(body.pageImages)) return bad('pageImages must be an array.');
+    if (body.pageImages.length > MAX_PAGE_IMAGES) return bad(`pageImages may contain at most ${MAX_PAGE_IMAGES} images.`);
+    // One shared budget for every image in the request, so the total body stays under the platform limit.
+    let total = imageBase64.length;
+    for (const raw of body.pageImages) {
+      if (typeof raw !== 'string') return bad('Each page image must be a base64 string.');
+      total += raw.length;
+      if (total > MAX_IMAGE_BASE64_CHARS + 200 * (body.pageImages.length + 1)) return bad(TOO_LARGE_MESSAGE, 413);
+      const b64 = raw.replace(/^data:[^;,]+;base64,/, '').trim();
+      if (!b64) continue;
+      if (!BASE64_RE.test(b64)) return bad('A page image is not valid base64 data.');
+      if (!looksLikeFileType(b64, 'image/jpeg')) return bad(CORRUPT_FILE_MESSAGE);
+      pageImages.push(b64);
+    }
+    if (imageBase64.length + pageImages.reduce((n, i) => n + i.length, 0) > MAX_IMAGE_BASE64_CHARS) return bad(TOO_LARGE_MESSAGE, 413);
+  }
 
-  return { ok: true, value: { documentText, imageBase64, mimeType, userName, familyNames } };
+  if (!imageBase64 && pageImages.length === 0 && !documentText.trim()) return bad('Provide a non-empty image or document text to scan.');
+
+  return { ok: true, value: { documentText, imageBase64, mimeType, pageImages, userName, familyNames } };
 }

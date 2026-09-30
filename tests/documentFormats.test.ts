@@ -119,15 +119,17 @@ test('resolveUploadMime: known extension wins over empty/wrong browser types', (
   assert.equal(resolveUploadMime({ name: 'noext', type: '' }), undefined);
 });
 
-test('checkUploadFile: supported types pass, big documents get a friendly error, images are not size-limited up front', () => {
+test('checkUploadFile: supported types pass, documents over the hard limit get a friendly error, larger ones pass to browser-side shrinking', () => {
   for (const [name, kind] of [['a.pdf', 'pdf'], ['a.docx', 'office'], ['a.xlsx', 'office'], ['a.xls', 'office'], ['a.doc', 'office'], ['a.csv', 'text'], ['a.txt', 'text'], ['a.png', 'image']] as const) {
     const r = checkUploadFile({ name, type: '', size: 1000 });
     assert.equal(r.ok, true, name);
     if (r.ok) assert.equal(r.kind, kind);
   }
-  const big = checkUploadFile({ name: 'huge.pdf', type: 'application/pdf', size: MAX_UPLOAD_FILE_BYTES + 1 });
-  assert.equal(big.ok, false);
-  if (!big.ok) assert.match(big.error, /too large.*3 MB/i);
+  // Files above 3 MB are no longer refused: the browser shrinks them first (see largeFile.test.ts). Only the 50 MB hard limit is.
+  assert.equal(checkUploadFile({ name: 'big.pdf', type: 'application/pdf', size: MAX_UPLOAD_FILE_BYTES + 1 }).ok, true);
+  const huge = checkUploadFile({ name: 'huge.pdf', type: 'application/pdf', size: 60_000_000 });
+  assert.equal(huge.ok, false);
+  if (!huge.ok) assert.match(huge.error, /too large.*50 MB/i);
   assert.equal(checkUploadFile({ name: 'phone.jpg', type: 'image/jpeg', size: 12_000_000 }).ok, true, 'photos are downscaled, not rejected');
   const bad = checkUploadFile({ name: 'x.exe', type: '', size: 10 });
   assert.equal(bad.ok, false);
