@@ -225,7 +225,7 @@ test('static: the only location.reload() calls are the two explicit user actions
   assert.deepEqual(hits.sort(), ['src/components/ProfileScreen.tsx', 'src/components/ResetAndBackupModal.tsx', 'src/lib/swRegister.ts']);
 });
 
-test('static: no handler reloads on focus / visibilitychange / pageshow / resume; no unload/beforeunload handlers (bfcache-safe)', async () => {
+test('static: no handler reloads on focus / visibilitychange / pageshow / resume (the long-session rule lives in sessionFreshness.ts, tested there); no unload/beforeunload handlers (bfcache-safe)', async () => {
   for (const f of [...(await sources(path.join(ROOT, 'src'))), path.join(ROOT, 'index.html'), path.join(ROOT, 'public/sw.js')]) {
     const src = await fs.readFile(f, 'utf8');
     assert.doesNotMatch(src, /['"](unload|beforeunload)['"]/, `${path.relative(ROOT, f)} must not use unload/beforeunload (breaks bfcache)`);
@@ -256,7 +256,7 @@ test('service worker: install does NOT skipWaiting; only a SKIP_WAITING message 
   assert.equal(skipped, 0);
   listeners.message({ data: { type: 'SKIP_WAITING' } });
   assert.equal(skipped, 1);
-  assert.match(src, /docmind-pwa-v9/);
+  assert.match(src, /docmind-pwa-v10/);
 });
 
 test('update checks are throttled and tolerate a clock that moved backwards', () => {

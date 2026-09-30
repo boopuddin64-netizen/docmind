@@ -4,7 +4,8 @@
  * public/sw.js no longer calls skipWaiting() on install. A new version therefore installs in the background and WAITS:
  *   - it takes over by itself on the next cold start (when every tab / the installed app has been closed), or
  *   - immediately when the user taps "Refresh" in the update banner (we post SKIP_WAITING, then reload once on controllerchange).
- * The page is never reloaded on focus / visibility change / resume, and never reloaded by the update without a user tap.
+ * A quick return to the app never reloads it. The ONLY automatic refresh is the long-session rule in sessionFreshness.ts
+ * (away >= 30 min, or a page older than 8 h that was away >= 1 min) and only when no modal / draft is open (refreshApp below).
  */
 
 export const SW_UPDATE_EVENT = 'docmind:sw-update';
@@ -13,6 +14,30 @@ export const UPDATE_CHECK_MIN_INTERVAL_MS = 30 * 60_000;
 export interface SwUpdateDetail {
   /** Activates the waiting worker and reloads the page once it has taken control. */
   apply: () => void;
+}
+
+/** The waiting update (if any), so the long-session refresh can apply it. */
+let pendingUpdate: SwUpdateDetail | null = null;
+export function getPendingUpdate(): SwUpdateDetail | null {
+  return pendingUpdate;
+}
+
+/**
+ * Soft refresh used after a long absence: applies a waiting service worker (it reloads once on controllerchange) or, when
+ * none is waiting, reloads the page (navigations are network-first, so the newest build is fetched).
+ */
+export function refreshApp(): void {
+  if (pendingUpdate) {
+    pendingUpdate.apply();
+    // Safety net: if the waiting worker vanished (no controllerchange), still refresh.
+    setTimeout(() => window.location.reload(), 4000);
+  } else window.location.reload();
+}
+
+/** Shows the non-intrusive update banner even when no service worker update is waiting (Refresh then simply reloads). */
+export function announceRefreshAvailable(): void {
+  const detail: SwUpdateDetail = pendingUpdate ?? { apply: () => window.location.reload() };
+  window.dispatchEvent(new CustomEvent<SwUpdateDetail>(SW_UPDATE_EVENT, { detail }));
 }
 
 export function shouldCheckForUpdate(lastCheck: number, now: number, minInterval = UPDATE_CHECK_MIN_INTERVAL_MS): boolean {
@@ -31,6 +56,7 @@ export function registerServiceWorker(): void {
         waiting.postMessage({ type: 'SKIP_WAITING' });
       },
     };
+    pendingUpdate = detail;
     window.dispatchEvent(new CustomEvent<SwUpdateDetail>(SW_UPDATE_EVENT, { detail }));
   };
 

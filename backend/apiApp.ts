@@ -87,7 +87,8 @@ export function createApiApp(pushDeps?: PushDeps, opts: ApiAppOptions = {}) {
       const filename = icsFilename(title);
 
       res.setHeader('Content-Type', 'text/calendar; charset=utf-8');
-      res.setHeader('Content-Disposition', `inline; filename="${filename}"`);
+      res.setHeader('Content-Disposition', `inline; filename="${filename}"; filename*=UTF-8''${encodeURIComponent(filename)}`);
+      res.setHeader('X-Content-Type-Options', 'nosniff');
       res.setHeader('Cache-Control', 'no-store');
       return res.send(icsContent);
     } catch (e: any) {

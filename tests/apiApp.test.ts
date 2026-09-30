@@ -230,3 +230,19 @@ test('HTTP: /api/download-ics carries the reminder alert and stable uid (Apple C
     assert.match(body, /DTSTART:20261115T093000/);
   });
 });
+
+test('HTTP: /api/download-ics headers are safe for iOS (text/calendar utf-8, inline, .ics filename, nosniff, no-store) and bad input never returns calendar type', async () => {
+  await withServer(createApiApp(pushDeps()), async (base) => {
+    const r = await fetch(`${base}/api/download-ics?title=${encodeURIComponent('Dr. Ade\u0301 & "Co" / Visit')}&date=15%2F11%2F2026`);
+    assert.equal(r.status, 200);
+    assert.equal(r.headers.get('content-type'), 'text/calendar; charset=utf-8');
+    const cd = r.headers.get('content-disposition') || '';
+    assert.match(cd, /^inline; filename="[A-Za-z0-9_]+\.ics"; filename\*=UTF-8''[A-Za-z0-9_%.]+\.ics$/);
+    assert.equal(r.headers.get('x-content-type-options'), 'nosniff');
+    assert.equal(r.headers.get('cache-control'), 'no-store');
+    assert.match(await r.text(), /^BEGIN:VCALENDAR\r\n/);
+    const bad = await fetch(`${base}/api/download-ics?title=x&date=banana`);
+    assert.equal(bad.status, 400);
+    assert.doesNotMatch(bad.headers.get('content-type') || '', /calendar/);
+  });
+});

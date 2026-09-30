@@ -2,6 +2,8 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { buildGoogleCalendarUrl, buildOutlookLiveUrl, buildOutlookOfficeUrl } from '../src/lib/calendarLinks';
 import { buildIcsContent, resolveEventWindow } from '../src/lib/icsBuilder';
+import { detectPlatform, planCalendarLaunch, launchAppWithFallback, APP_LAUNCH_TIMEOUT_MS, type LaunchDeps, type PlatformInfo } from '../src/lib/calendarPlatform';
+import { buildGoogleCalendarIosUrl, buildOutlookAppUrl, buildAndroidInsertIntent, buildGoogleCalendarAndroidIntent, buildOutlookAndroidIntent } from '../src/lib/calendarLinks';
 import { exportToCalendar, serverIcsUrl, type IcsExportEnv, type ExportableReminder } from '../src/lib/icalHelper';
 
 const params = (url: string) => new URL(url).searchParams;
@@ -120,6 +122,10 @@ test('google/outlook/ics all agree on the same start and end (shared resolver)',
 
 const rem: ExportableReminder = { id: 'r1', eventTitle: 'Dentist', appointmentDate: '15/11/2026', appointmentTime: '09:30 AM', notificationSchedule: { leadMinutes: 30 } };
 
+const IOS_PWA: PlatformInfo = { os: 'ios', standalone: true, intentCapable: false };
+const IOS_TAB: PlatformInfo = { os: 'ios', standalone: false, intentCapable: false };
+const ANDROID: PlatformInfo = { os: 'android', standalone: false, intentCapable: true };
+
 function fakeEnv(over: Partial<IcsExportEnv> = {}) {
   const log = { opened: [] as string[], saved: [] as string[], shared: [] as string[] };
   const env: IcsExportEnv = {
@@ -186,22 +192,65 @@ test('picker: share uses Web Share with the .ics File; unsupported => clear erro
   assert.equal((rd as any).reason, 'cancelled');
 });
 
-test('picker: apple opens the https server .ics (text/calendar) with alarm + uid; offline falls back to the on-device file', async () => {
-  const a = fakeEnv();
+test('picker: apple (iOS standalone PWA) shares the .ics FILE and never navigates / opens the server URL', async () => {
+  const a = fakeEnv({ platform: IOS_PWA });
+  const r = await exportToCalendar(rem, 'apple', a.env);
+  assert.equal(r.ok, true);
+  assert.deepEqual(a.log.shared, ['Dentist.ics']);
+  assert.equal(a.log.opened.length, 0);
+  assert.match((r as any).message, /Add to Calendar/);
+});
+
+test('picker: apple (iOS standalone) without file sharing downloads the on-device file; NEVER opens /api/download-ics', async () => {
+  const a = fakeEnv({ platform: IOS_PWA, canShareFile: () => false });
+  const r = await exportToCalendar(rem, 'apple', a.env);
+  assert.equal(r.ok, true);
+  assert.equal(a.log.opened.length, 0, 'the standalone app must not be pointed at a text/calendar URL (white screen)');
+  assert.deepEqual(a.log.saved, ['Dentist.ics']);
+  assert.match((r as any).message, /Add to Calendar/);
+  // even offline / with a failing download nothing is opened
+  const b = fakeEnv({ platform: IOS_PWA, canShareFile: () => false, online: false, saveBlob: () => { throw new Error('x'); } });
+  const rb = await exportToCalendar(rem, 'apple', b.env);
+  assert.equal(rb.ok, false);
+  assert.equal(b.log.opened.length, 0);
+});
+
+test('picker: apple (iOS Safari tab) without file sharing opens the server .ics in a NEW tab (absolute https URL, alarm + uid)', async () => {
+  const a = fakeEnv({ platform: IOS_TAB, canShareFile: () => false, origin: 'https://docmind.test' });
   const r = await exportToCalendar(rem, 'apple', a.env);
   assert.equal(r.ok, true);
   assert.equal(a.log.opened.length, 1);
-  const u = new URL(a.log.opened[0], 'https://docmind.test');
+  const u = new URL(a.log.opened[0]);
+  assert.equal(u.origin, 'https://docmind.test');
   assert.equal(u.pathname, '/api/download-ics');
   assert.equal(u.searchParams.get('alarm'), '30');
   assert.equal(u.searchParams.get('uid'), 'r1');
   assert.ok(!/^webcal:/i.test(a.log.opened[0]));
-  const b = fakeEnv({ online: false });
-  const rb = await exportToCalendar(rem, 'apple', b.env);
-  assert.equal(rb.ok, true);
-  assert.equal(b.log.opened.length, 0);
-  assert.deepEqual(b.log.shared, ['Dentist.ics']); // share sheet -> Calendar
   assert.match(serverIcsUrl(rem), /^\/api\/download-ics\?/);
+});
+
+test('picker: apple on iOS retries the share with a text/plain typed .ics when canShare refuses text/calendar', async () => {
+  const sharedTypes: string[] = [];
+  const a = fakeEnv({ platform: IOS_PWA, canShareFile: (f) => f.type === 'text/plain', shareFile: async (f) => { sharedTypes.push(f.type + ':' + f.name); } });
+  const r = await exportToCalendar(rem, 'apple', a.env);
+  assert.equal(r.ok, true);
+  assert.deepEqual(sharedTypes, ['text/plain:Dentist.ics']);
+  assert.equal(a.log.opened.length + a.log.saved.length, 0);
+});
+
+test('picker: apple share cancelled => cancelled (no fallback opened)', async () => {
+  const a = fakeEnv({ platform: IOS_PWA, shareFile: async () => { const e: any = new Error('x'); e.name = 'AbortError'; throw e; } });
+  const r = await exportToCalendar(rem, 'apple', a.env);
+  assert.equal(r.ok, false);
+  assert.equal((r as any).reason, 'cancelled');
+  assert.equal(a.log.opened.length + a.log.saved.length, 0);
+});
+
+test('picker: exportIcsCalendar never opens the server URL from an iOS standalone app when the download fails', async () => {
+  const a = fakeEnv({ platform: IOS_PWA, isMobile: false, saveBlob: () => { throw new Error('x'); } });
+  const r = await exportToCalendar(rem, 'ics', a.env);
+  assert.equal(r.ok, false);
+  assert.equal(a.log.opened.length, 0);
 });
 
 test('picker: ics always downloads (never opens the share sheet); a failing download is reported', async () => {
@@ -214,4 +263,170 @@ test('picker: ics always downloads (never opens the share sheet); a failing down
   const rb = await exportToCalendar(rem, 'ics', b.env);
   assert.equal(rb.ok, false);
   assert.match((rb as any).message, /Could not export/);
+});
+
+// ---- platform selection + app-first launch --------------------------------------------------------------------------
+
+const UA_IPHONE = 'Mozilla/5.0 (iPhone; CPU iPhone OS 17_5 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.5 Mobile/15E148 Safari/604.1';
+const UA_ANDROID = 'Mozilla/5.0 (Linux; Android 14; Pixel 8) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Mobile Safari/537.36';
+
+test('platform: iPhone Safari tab vs Home Screen PWA (navigator.standalone / display-mode)', () => {
+  assert.deepEqual(detectPlatform({ userAgent: UA_IPHONE }), { os: 'ios', standalone: false, intentCapable: false });
+  assert.equal(detectPlatform({ userAgent: UA_IPHONE, navigatorStandalone: true }).standalone, true);
+  assert.equal(detectPlatform({ userAgent: UA_IPHONE, displayModeStandalone: true }).standalone, true);
+});
+
+test('platform: iPadOS reporting a Mac UA is iOS (touch), a real Mac is not; Android; Firefox Android has no intents; TWA is standalone', () => {
+  assert.equal(detectPlatform({ userAgent: 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)', platform: 'MacIntel', maxTouchPoints: 5 }).os, 'ios');
+  assert.equal(detectPlatform({ userAgent: 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)', platform: 'MacIntel', maxTouchPoints: 0 }).os, 'other');
+  assert.deepEqual(detectPlatform({ userAgent: UA_ANDROID }), { os: 'android', standalone: false, intentCapable: true });
+  assert.equal(detectPlatform({ userAgent: 'Mozilla/5.0 (Android 14; Mobile; rv:126.0) Gecko/126.0 Firefox/126.0' }).intentCapable, false);
+  assert.equal(detectPlatform({ userAgent: UA_ANDROID, referrer: 'android-app://com.docmind' }).standalone, true);
+  assert.equal(detectPlatform({}).os, 'other');
+});
+
+const input = { title: 'Dentist', note: 'Bring card', location: 'City Clinic', date: '15/11/2026', time: '09:30 AM', timeZone: 'Africa/Lagos' };
+
+test('launch plan: iOS => app schemes with https web fallback; Android => intent:// with browser_fallback_url; other => web', () => {
+  const g = planCalendarLaunch('google', IOS_PWA, input);
+  assert.equal(g.mode, 'scheme');
+  assert.ok(g.url.startsWith('com.google.calendar://?action=create'));
+  assert.ok(g.fallbackUrl.startsWith('https://calendar.google.com/calendar/render?action=TEMPLATE'));
+  const o = planCalendarLaunch('outlook', IOS_TAB, input);
+  assert.ok(o.url.startsWith('ms-outlook://events/new?'));
+  assert.ok(o.fallbackUrl.startsWith('https://outlook.live.com/'));
+  assert.ok(planCalendarLaunch('outlook365', IOS_TAB, input).fallbackUrl.startsWith('https://outlook.office.com/'));
+
+  const ga = planCalendarLaunch('google', ANDROID, input);
+  assert.equal(ga.mode, 'intent');
+  assert.match(ga.url, /^intent:\/\/calendar\.google\.com\/calendar\/render\?action=TEMPLATE.*#Intent;scheme=https;package=com\.google\.android\.calendar;S\.browser_fallback_url=https%3A%2F%2Fcalendar\.google\.com.*;end$/);
+  const oa = planCalendarLaunch('outlook', ANDROID, input);
+  assert.match(oa.url, /^intent:\/\/events\/new\?.*#Intent;scheme=ms-outlook;package=com\.microsoft\.office\.outlook;S\.browser_fallback_url=https%3A%2F%2Foutlook\.live\.com.*;end$/);
+  assert.match(planCalendarLaunch('outlook365', ANDROID, input).url, /browser_fallback_url=https%3A%2F%2Foutlook\.office\.com/);
+
+  for (const t of ['google', 'outlook', 'outlook365'] as const) {
+    const w = planCalendarLaunch(t, { os: 'other', standalone: false, intentCapable: false }, input);
+    assert.equal(w.mode, 'web');
+    assert.ok(w.url.startsWith('https://'));
+    assert.equal(w.url, w.fallbackUrl);
+    // Firefox Android: no intents
+    assert.equal(planCalendarLaunch(t, { os: 'android', standalone: false, intentCapable: false }, input).mode, 'web');
+  }
+});
+
+test('intent fallback url round-trips (encoded once) and has no raw # / ; inside the intent body', () => {
+  const url = buildGoogleCalendarAndroidIntent({ title: 'A; B #1 & C', date: '15/11/2026', time: '10:00', timeZone: 'UTC' });
+  const body = url.slice(0, url.indexOf('#Intent;'));
+  assert.ok(!body.includes('#') && !/;/.test(body));
+  const fb = /S\.browser_fallback_url=([^;]+);end/.exec(url)![1];
+  assert.equal(new URL(decodeURIComponent(fb)).searchParams.get('text'), 'A; B #1 & C');
+  assert.ok(buildOutlookAndroidIntent({ title: 'x', date: '15/11/2026' }, true).includes('outlook.office.com'));
+});
+
+test('android insert intent: title / begin / end extras (epoch ms), all-day flag, web fallback', () => {
+  withTz('Africa/Lagos', () => {
+    const u = buildAndroidInsertIntent({ title: 'Dentist', note: 'n', location: 'Clinic', date: '15/11/2026', time: '09:30' });
+    assert.ok(u.startsWith('intent:#Intent;action=android.intent.action.INSERT;type=vnd.android.cursor.dir/event;'));
+    assert.match(u, /S\.title=Dentist/);
+    assert.match(u, /S\.eventLocation=Clinic/);
+    const begin = Number(/l\.beginTime=(\d+)/.exec(u)![1]);
+    const end = Number(/l\.endTime=(\d+)/.exec(u)![1]);
+    assert.equal(new Date(begin).toISOString(), '2026-11-15T08:30:00.000Z'); // 09:30 Lagos (UTC+1)
+    assert.equal(end - begin, 3600_000);
+    assert.ok(!u.includes('B.allDay'));
+    assert.match(u, /S\.browser_fallback_url=https%3A%2F%2Fcalendar\.google\.com/);
+    const d = buildAndroidInsertIntent({ title: 'x', date: '15/11/2026' });
+    assert.match(d, /B\.allDay=true/);
+    assert.equal(Number(/l\.endTime=(\d+)/.exec(d)![1]) - Number(/l\.beginTime=(\d+)/.exec(d)![1]), 24 * 3600_000);
+  });
+  assert.equal(planCalendarLaunch('device', ANDROID, input).mode, 'intent');
+  assert.equal(planCalendarLaunch('device', IOS_PWA, input).mode, 'web');
+});
+
+test('ios app urls: google create params (wall-clock + ctz, all-day) and outlook local ISO start/end', () => {
+  const g = new URL(buildGoogleCalendarIosUrl(input).replace('com.google.calendar://', 'https://x/'));
+  assert.equal(g.searchParams.get('action'), 'create');
+  assert.equal(g.searchParams.get('text'), 'Dentist');
+  assert.equal(g.searchParams.get('dates'), '20261115T093000/20261115T103000');
+  assert.equal(g.searchParams.get('ctz'), 'Africa/Lagos');
+  const gd = new URL(buildGoogleCalendarIosUrl({ title: 'x', date: '15/11/2026' }).replace('com.google.calendar://', 'https://x/'));
+  assert.equal(gd.searchParams.get('dates'), '20261115/20261116');
+  assert.equal(gd.searchParams.get('isallday'), '1');
+  const o = new URL(buildOutlookAppUrl(input).replace('ms-outlook://', 'https://'));
+  assert.equal(o.host, 'events');
+  assert.equal(o.searchParams.get('start'), '2026-11-15T09:30:00');
+  assert.equal(o.searchParams.get('end'), '2026-11-15T10:30:00');
+  assert.equal(o.searchParams.get('title'), 'Dentist');
+  assert.ok(!/[ "<>]/.test(buildOutlookAppUrl(input)));
+});
+
+function fakeLaunch(over: Partial<LaunchDeps> = {}) {
+  const log = { fired: [] as string[], fallbacks: [] as string[], cleared: 0, unsub: 0 };
+  let leave: (() => void) | undefined;
+  let timer: (() => void) | undefined;
+  let timerMs = -1;
+  let hidden = false;
+  const deps: LaunchDeps = {
+    fire: (u) => { log.fired.push(u); },
+    fallback: (u) => { log.fallbacks.push(u); },
+    isHidden: () => hidden,
+    subscribe: (fn) => { leave = fn; return () => { log.unsub++; }; },
+    setTimer: (fn, ms) => { timer = fn; timerMs = ms; return 1; },
+    clearTimer: () => { log.cleared++; },
+    ...over,
+  };
+  return { deps, log, leave: () => { hidden = true; leave?.(); }, fireTimer: () => timer?.(), timerMs: () => timerMs, setHidden: (h: boolean) => { hidden = h; } };
+}
+
+test('ios timed fallback: page still visible after ~1.5s => web fallback opens once', () => {
+  const f = fakeLaunch();
+  launchAppWithFallback('ms-outlook://x', 'https://web', f.deps);
+  assert.deepEqual(f.log.fired, ['ms-outlook://x']);
+  assert.equal(f.timerMs(), APP_LAUNCH_TIMEOUT_MS);
+  assert.equal(APP_LAUNCH_TIMEOUT_MS, 1500);
+  f.fireTimer();
+  assert.deepEqual(f.log.fallbacks, ['https://web']);
+  f.fireTimer();
+  assert.equal(f.log.fallbacks.length, 1);
+});
+
+test('ios timed fallback: app opened (pagehide / hidden) => NO web fallback, listeners cleaned up', () => {
+  const f = fakeLaunch();
+  launchAppWithFallback('googlecalendar://x', 'https://web', f.deps);
+  f.leave();
+  f.fireTimer();
+  assert.equal(f.log.fallbacks.length, 0);
+  assert.ok(f.log.unsub >= 1 && f.log.cleared >= 1);
+});
+
+test('ios timed fallback: timer fires while page is hidden => no fallback; cancel() stops it', () => {
+  const f = fakeLaunch();
+  launchAppWithFallback('u', 'https://web', f.deps);
+  f.setHidden(true);
+  f.fireTimer();
+  assert.equal(f.log.fallbacks.length, 0);
+  const g = fakeLaunch();
+  const h = launchAppWithFallback('u', 'https://web', g.deps);
+  h.cancel();
+  g.fireTimer();
+  assert.equal(g.log.fallbacks.length, 0);
+});
+
+test('picker: iOS google / outlook run the scheme plan (app first, web fallback); Android runs the intent; offline refuses', async () => {
+  const plans: any[] = [];
+  const ios = fakeEnv({ platform: IOS_PWA, launch: (p) => plans.push(p) });
+  const r = await exportToCalendar(rem, 'google', ios.env, 'Africa/Lagos');
+  assert.equal(r.ok, true);
+  assert.match((r as any).message, /app/);
+  await exportToCalendar(rem, 'outlook', ios.env);
+  assert.equal(plans[0].mode, 'scheme');
+  assert.match(plans[0].url, /^com\.google\.calendar:\/\//);
+  assert.match(plans[1].url, /^ms-outlook:\/\//);
+  assert.equal(ios.log.opened.length, 0);
+  const and = fakeEnv({ platform: ANDROID, launch: (p) => plans.push(p) });
+  await exportToCalendar(rem, 'device', and.env);
+  assert.equal(plans[2].mode, 'intent');
+  const off = fakeEnv({ platform: IOS_PWA, online: false, launch: (p) => plans.push(p) });
+  assert.equal((await exportToCalendar(rem, 'google', off.env)).ok, false);
+  assert.equal(plans.length, 3);
 });

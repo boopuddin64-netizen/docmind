@@ -3,6 +3,7 @@ import { CalendarPlus, Download, Mail, Share2, Smartphone, X, CalendarDays, Buil
 import { useEscapeKey } from '../lib/useEscapeKey';
 import { canShareIcsFile, exportToCalendar, type CalendarTarget, type ExportableReminder } from '../lib/icalHelper';
 import { deviceTimeZone } from '../lib/calendarLinks';
+import { DEFAULT_PLATFORM, browserPlatform } from '../lib/calendarPlatform';
 
 interface CalendarExportSheetProps {
   /** Reminder to export; null = closed. */
@@ -21,10 +22,11 @@ interface Option {
 
 const OPTIONS: Option[] = [
   { target: 'share', label: 'Share / open in calendar app', hint: 'Send the event to any calendar app installed on your phone', Icon: Share2 },
-  { target: 'apple', label: 'Apple Calendar', hint: 'iPhone: opens the event, then tap "Add to Calendar"', Icon: Smartphone },
-  { target: 'google', label: 'Google Calendar', hint: 'Opens the Google Calendar app or website', Icon: CalendarDays },
-  { target: 'outlook', label: 'Outlook', hint: 'Outlook.com / Hotmail / Live account', Icon: Mail },
-  { target: 'outlook365', label: 'Outlook (work or school)', hint: 'Microsoft 365 account', Icon: Building2 },
+  { target: 'device', label: 'Calendar app on this phone', hint: 'Opens your phone\'s calendar with the event filled in', Icon: CalendarPlus },
+  { target: 'apple', label: 'Apple Calendar', hint: 'iPhone: choose "Add to Calendar" in the share sheet', Icon: Smartphone },
+  { target: 'google', label: 'Google Calendar', hint: 'Opens the Google Calendar app if installed, otherwise the website', Icon: CalendarDays },
+  { target: 'outlook', label: 'Outlook', hint: 'Opens the Outlook app if installed, otherwise the website', Icon: Mail },
+  { target: 'outlook365', label: 'Outlook (work or school)', hint: 'Outlook app or Microsoft 365 website', Icon: Building2 },
   { target: 'ics', label: 'Download .ics file', hint: 'Works with every calendar app', Icon: Download },
 ];
 
@@ -38,6 +40,7 @@ export const CalendarExportSheet: React.FC<CalendarExportSheetProps> = ({ remind
   const [error, setError] = useState<string | null>(null);
   const sheetRef = useRef<HTMLDivElement>(null);
   const canShare = open ? canShareIcsFile() : false;
+  const platform = open ? browserPlatform() : DEFAULT_PLATFORM;
 
   useEscapeKey(open, onClose);
 
@@ -86,7 +89,12 @@ export const CalendarExportSheet: React.FC<CalendarExportSheetProps> = ({ remind
     }
   };
 
-  const visible = OPTIONS.filter((o) => o.target !== 'share' || canShare);
+  // 'device' (Android insert intent) only exists on Android; 'apple' is shown on iOS only (elsewhere .ics / Share cover it).
+  const visible = OPTIONS.filter((o) =>
+    o.target === 'share' ? canShare :
+    o.target === 'device' ? platform.os === 'android' && platform.intentCapable :
+    o.target === 'apple' ? platform.os === 'ios' || platform.os === 'other' :
+    true);
 
   return (
     <div
