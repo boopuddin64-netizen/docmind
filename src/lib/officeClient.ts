@@ -1,3 +1,5 @@
+import { ScanError, isDynamicImportFailure, networkError } from './scanErrors';
+
 /**
  * Browser-side text extraction for large Word / Excel / CSV / TXT files. mammoth (browser build) and SheetJS are loaded
  * on demand with dynamic import(), so they are not part of the main bundle.
@@ -26,6 +28,7 @@ export async function extractDocxText(data: ArrayBuffer): Promise<string> {
     const mammoth = (await import('mammoth/mammoth.browser.min.js')).default;
     text = (await mammoth.extractRawText({ arrayBuffer: data })).value;
   } catch (e) {
+    if (isDynamicImportFailure(e)) throw networkError('chunk'); // the reader could not be downloaded: a connection problem, not a bad file
     console.warn('docx read failed', e);
     throw new OfficeReadError(OFFICE_UNREADABLE_MESSAGE);
   }
@@ -36,7 +39,11 @@ export async function extractDocxText(data: ArrayBuffer): Promise<string> {
 /** xlsx / xls / csv → "## Sheet: name" + CSV per sheet. `sheetsTruncated` is true when rows or sheets were skipped. */
 export async function extractSheetText(data: ArrayBuffer): Promise<{ text: string; sheetsTruncated: boolean }> {
   let XLSX: typeof import('xlsx');
-  try { XLSX = await import('xlsx'); } catch (e) { console.warn('xlsx load failed', e); throw new OfficeReadError(OFFICE_UNREADABLE_MESSAGE); }
+  try { XLSX = await import('xlsx'); } catch (e) {
+    if (isDynamicImportFailure(e)) throw networkError('chunk');
+    console.warn('xlsx load failed', e);
+    throw new OfficeReadError(OFFICE_UNREADABLE_MESSAGE);
+  }
   try {
     const wb = XLSX.read(new Uint8Array(data), { type: 'array', cellDates: true, sheetRows: MAX_ROWS_PER_SHEET + 1 });
     const out: string[] = [];
@@ -56,7 +63,7 @@ export async function extractSheetText(data: ArrayBuffer): Promise<{ text: strin
     if (!text.trim()) throw new OfficeReadError(OFFICE_EMPTY_MESSAGE);
     return { text, sheetsTruncated };
   } catch (e) {
-    if (e instanceof OfficeReadError) throw e;
+    if (e instanceof OfficeReadError || e instanceof ScanError) throw e;
     console.warn('sheet read failed', e);
     throw new OfficeReadError(OFFICE_UNREADABLE_MESSAGE);
   }

@@ -18,6 +18,7 @@ import {
 } from './largeFile';
 import type { PdfDocLike, PdfjsLike } from './pdfClient';
 import type { UploadKind } from './uploadFormats';
+import { ScanError, isDynamicImportFailure, networkError } from './scanErrors';
 
 /** What the scan request needs (all optional; the server requires at least one of text / image / pages). */
 export interface PreparedScan {
@@ -115,7 +116,9 @@ export async function prepareLargeFile(
       notice: truncated || built.truncated ? TRUNCATED_TEXT_NOTICE : undefined,
     };
   } catch (e) {
-    if (e instanceof PrepareError) throw e;
+    if (e instanceof PrepareError || e instanceof ScanError) throw e;
+    // pdf.js / mammoth / SheetJS are lazy chunks: failing to download one is a connection problem, not a bad file.
+    if (isDynamicImportFailure(e)) throw networkError('chunk');
     // OfficeReadError / PdfReadError / PayloadTooLargeError all carry user-safe messages.
     throw new PrepareError(errMessage(e));
   }

@@ -87,10 +87,10 @@ test('client scan response: checks ok + content-type before json(); friendly err
     [mkRes(413, 'text/plain', 'Request Entity Too Large', true), /too large/i, 413],
     [mkRes(413, 'application/json', { success: false, error: 'x' }), /too large/i, 413],
     [mkRes(429, 'application/json', { success: false, error: 'x' }), /wait/i, 429],
-    [mkRes(502, 'text/html', '<html>Bad gateway</html>', true), /could not scan/i, 502],
+    [mkRes(502, 'text/html', '<html>Bad gateway</html>', true), /network problem/i, 502], // gateway page: infrastructure, not the AI
     [mkRes(502, 'application/json', { success: false, error: 'We could not read this document.' }), /could not read/i, 502],
-    [mkRes(200, 'text/html', '<html>', true), /unexpected reply/i, 200],
-    [mkRes(200, 'application/json', null, true), /unreadable/i, 200],
+    [mkRes(200, 'text/html', '<html>', true), /network problem/i, 200], // captive portal / proxy page
+    [mkRes(200, 'application/json', null, true), /network problem/i, 200], // cut-off body
     [mkRes(200, 'application/json', { success: false, error: 'nope' }), /nope/, 200],
     [mkRes(200, 'application/json', { success: true }), /did not return/i, 200],
   ];
