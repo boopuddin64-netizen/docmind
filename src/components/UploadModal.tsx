@@ -15,6 +15,7 @@ import { ExtractedDocData, UserProfile } from '../types';
 import { preprocessDocumentImage } from '../lib/preprocessor';
 import { ScanError, downscaleImage, readScanResponse } from '../lib/scanClient';
 import { useEscapeKey } from '../lib/useEscapeKey';
+import { FILE_INPUT_ACCEPT, checkUploadFile, toDataUrl } from '../lib/uploadFormats';
 
 interface UploadModalProps {
   isOpen: boolean;
@@ -57,10 +58,9 @@ export const UploadModal: React.FC<UploadModalProps> = ({
       let finalBase64 = payload.imageBase64;
       let mimeType = payload.mimeType;
 
-      if (payload.imageBase64) {
-        if (!payload.imageBase64.startsWith('data:image')) {
-          throw new ScanError('Only image files (JPG, PNG, WebP) can be scanned. Use "Add manually instead" for other files.');
-        }
+      // Only images are preprocessed / downscaled. PDF, Word, Excel, CSV and TXT are sent untouched (the server reads them).
+      const isImage = !!payload.imageBase64 && (mimeType || '').startsWith('image/');
+      if (payload.imageBase64 && isImage) {
         // Layer 1 preprocessing (deskew / contrast) is best-effort; a decode failure here is a REAL failure below.
         try {
           const { processedDataUrl, stats } = await preprocessDocumentImage(payload.imageBase64, {
@@ -97,7 +97,8 @@ export const UploadModal: React.FC<UploadModalProps> = ({
       const data = await readScanResponse(response);
       onExtracted({
         ...data,
-        documentUrl: finalBase64 || data.documentUrl,
+        // Only images can be previewed as <img>; other formats fall back to the extracted-text preview.
+        documentUrl: (isImage && finalBase64) || data.documentUrl,
       });
       setIsScanning(false);
       onClose();
@@ -113,18 +114,24 @@ export const UploadModal: React.FC<UploadModalProps> = ({
   };
 
   const handleFileUpload = (file: File) => {
-    if (!file.type.startsWith('image/')) {
-      setScanError('Only image files (JPG, PNG, WebP) can be scanned. Use "Add manually instead" for other files.');
+    const check = checkUploadFile(file);
+    if ('error' in check) {
+      setScanError(check.error);
       return;
     }
     const reader = new FileReader();
     reader.onerror = () => setScanError('That file could not be read. Please choose another one.');
     reader.onload = (e) => {
-      const base64 = e.target?.result as string;
+      const result = e.target?.result;
+      if (typeof result !== 'string') {
+        setScanError('That file could not be read. Please choose another one.');
+        return;
+      }
       processScan({
-        imageBase64: base64,
+        // The resolved MIME type wins over the browser's (which is often empty/wrong for .doc, .xls, .csv).
+        imageBase64: toDataUrl(result, check.mime),
         documentText: file.name,
-        mimeType: file.type || 'image/jpeg',
+        mimeType: check.mime,
       });
     };
     reader.readAsDataURL(file);
@@ -244,22 +251,23 @@ export const UploadModal: React.FC<UploadModalProps> = ({
               <input
                 ref={fileInputRef}
                 type="file"
-                accept="image/*"
+                accept={FILE_INPUT_ACCEPT}
                 className="hidden"
                 onChange={(e) => {
                   if (e.target.files && e.target.files[0]) {
                     handleFileUpload(e.target.files[0]);
                   }
+                  e.target.value = ''; // allow re-picking the same file after an error
                 }}
               />
               <div className="w-12 h-12 rounded-full bg-[#f2f4f5] dark:bg-sky-900/40 text-[#0284c7] dark:text-sky-300 mx-auto flex items-center justify-center mb-3">
                 <Camera className="w-6 h-6" />
               </div>
               <p className="text-sm font-semibold text-[#191c1d] dark:text-white">
-                Click or drag & drop image or document
+                Click or drag & drop an image or document
               </p>
               <p className="text-xs text-[#707975] dark:text-sky-300/70 mt-1">
-                Supports JPG, PNG, WebP, receipts, or photos from camera
+                Supports JPG, PNG, WebP, PDF, Word, Excel, CSV and TXT (up to 3 MB for documents)
               </p>
             </div>
 
