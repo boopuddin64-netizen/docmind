@@ -1,5 +1,6 @@
 import { buildIcsContent, icsFilename, isStrictIcsDate } from './icsBuilder';
 import { DEFAULT_LEAD_MINUTES, clampLeadMinutes } from './schedule';
+import { buildGoogleCalendarUrl, buildOutlookLiveUrl, buildOutlookOfficeUrl, type CalendarLinkInput } from './calendarLinks';
 
 /**
  * iCal (.ics) export, generated 100% on the device (works offline; the server is only a last-resort fallback).
@@ -59,12 +60,31 @@ export function browserEnv(): IcsExportEnv {
       setTimeout(() => URL.revokeObjectURL(url), 30_000);
     },
     openUrl: (url) => {
-      const w = window.open(url, '_blank', 'noopener');
-      if (!w) window.location.assign(url);
+      // NOTE: window.open(..., 'noopener') always returns null, so "null => navigate" would also navigate the app away
+      // after a successful open. A programmatic <a target=_blank> click has no such ambiguity, is treated as a user
+      // gesture, and lets Android hand calendar.google.com links to the installed Google Calendar app.
+      try {
+        const link = document.createElement('a');
+        link.href = url;
+        link.target = '_blank';
+        link.rel = 'noopener noreferrer';
+        link.style.display = 'none';
+        document.body.appendChild(link);
+        link.click();
+        document.body.removeChild(link);
+      } catch {
+        window.location.assign(url);
+      }
     },
   };
 }
 
+function alarmMinutesFor(reminder: ExportableReminder): number {
+  const lead = reminder.notificationSchedule?.leadMinutes;
+  return clampLeadMinutes(lead === undefined ? DEFAULT_LEAD_MINUTES : lead);
+}
+
+/** Server-built .ics (same shared builder as the on-device file, incl. reminder alert + stable UID). Content-Type: text/calendar. */
 export function serverIcsUrl(reminder: ExportableReminder): string {
   const p = new URLSearchParams({
     title: reminder.eventTitle || 'Reminder',
@@ -73,8 +93,22 @@ export function serverIcsUrl(reminder: ExportableReminder): string {
     recipient: reminder.patientName || '',
     date: reminder.appointmentDate || '',
     time: reminder.appointmentTime || '',
+    alarm: String(alarmMinutesFor(reminder)),
   });
+  if (reminder.id) p.set('uid', reminder.id);
   return `/api/download-ics?${p.toString()}`;
+}
+
+export function calendarLinkInput(reminder: ExportableReminder, timeZone?: string): CalendarLinkInput {
+  return {
+    title: reminder.eventTitle,
+    note: reminder.shortNote,
+    location: reminder.hospitalName,
+    recipient: reminder.patientName,
+    date: reminder.appointmentDate,
+    time: reminder.appointmentTime,
+    timeZone,
+  };
 }
 
 export async function exportIcsCalendar(reminder: ExportableReminder, env: IcsExportEnv = browserEnv()): Promise<IcsExportResult> {
@@ -82,7 +116,6 @@ export async function exportIcsCalendar(reminder: ExportableReminder, env: IcsEx
   if (!isStrictIcsDate(reminder.appointmentDate)) {
     return { ok: false, reason: 'invalid-date', message: 'Can not export: this reminder has no valid date. Edit the date first.' };
   }
-  const lead = reminder.notificationSchedule?.leadMinutes;
   const content = buildIcsContent({
     title: reminder.eventTitle,
     note: reminder.shortNote,
@@ -91,7 +124,7 @@ export async function exportIcsCalendar(reminder: ExportableReminder, env: IcsEx
     date: reminder.appointmentDate,
     time: reminder.appointmentTime,
     uid: reminder.id,
-    alarmMinutes: clampLeadMinutes(lead === undefined ? DEFAULT_LEAD_MINUTES : lead),
+    alarmMinutes: alarmMinutesFor(reminder),
   });
   const filename = icsFilename(reminder.eventTitle);
   const blob = new Blob([content], { type: 'text/calendar;charset=utf-8' });
@@ -130,4 +163,84 @@ export async function exportIcsCalendar(reminder: ExportableReminder, env: IcsEx
 /** Back-compat wrapper: resolves true when a file was handed to the user. */
 export async function downloadIcsCalendar(reminder: ExportableReminder): Promise<boolean> {
   return (await exportIcsCalendar(reminder)).ok;
+}
+
+// ---------------------------------------------------------------------------------------------------------------------
+// Export picker targets
+// ---------------------------------------------------------------------------------------------------------------------
+
+export type CalendarTarget = 'share' | 'apple' | 'google' | 'outlook' | 'outlook365' | 'ics';
+
+export type CalendarExportResult =
+  | { ok: true; target: CalendarTarget; method: 'share' | 'download' | 'server' | 'link'; message: string }
+  | { ok: false; reason: 'invalid-date' | 'cancelled' | 'failed' | 'unsupported' | 'offline'; message: string };
+
+/** Can this browser hand a .ics FILE to an installed app (Web Share Level 2)? Used to show / hide the Share option. */
+export function canShareIcsFile(env: IcsExportEnv = browserEnv()): boolean {
+  if (!env.shareFile) return false;
+  if (!env.canShareFile) return false; // navigator.canShare is required: a bare navigator.share cannot take files everywhere
+  try {
+    return env.canShareFile(new File(['BEGIN:VCALENDAR\r\nEND:VCALENDAR\r\n'], 'event.ics', { type: 'text/calendar' }));
+  } catch {
+    return false;
+  }
+}
+
+function openLink(env: IcsExportEnv, url: string, target: CalendarTarget, label: string): CalendarExportResult {
+  if (!env.online) return { ok: false, reason: 'offline', message: `You are offline. Connect to the internet to open ${label}, or download the .ics file instead.` };
+  try {
+    env.openUrl(url);
+    return { ok: true, target, method: 'link', message: `Opening ${label}...` };
+  } catch {
+    return { ok: false, reason: 'failed', message: `Could not open ${label}. Try "Download .ics file" instead.` };
+  }
+}
+
+/**
+ * Runs one entry of the export picker. Must be called straight from the tap handler (before any `await`) so that
+ * window.open / navigation is not treated as a blocked popup.
+ */
+export async function exportToCalendar(
+  reminder: ExportableReminder,
+  target: CalendarTarget,
+  env: IcsExportEnv = browserEnv(),
+  timeZone?: string,
+): Promise<CalendarExportResult> {
+  if (!isStrictIcsDate(reminder.appointmentDate)) {
+    return { ok: false, reason: 'invalid-date', message: 'Can not export: this reminder has no valid date. Edit the date first.' };
+  }
+  const input = calendarLinkInput(reminder, timeZone);
+  switch (target) {
+    case 'google':
+      return openLink(env, buildGoogleCalendarUrl(input), 'google', 'Google Calendar');
+    case 'outlook':
+      return openLink(env, buildOutlookLiveUrl(input), 'outlook', 'Outlook');
+    case 'outlook365':
+      return openLink(env, buildOutlookOfficeUrl(input), 'outlook365', 'Outlook (work or school)');
+    case 'apple': {
+      // https link to the server-built .ics (Content-Type: text/calendar, inline). iOS Safari shows "Add to Calendar" for it.
+      // webcal:// is deliberately NOT used: iOS treats it as a calendar SUBSCRIPTION (adds a whole subscribed calendar and
+      // needs a feed that stays online), not a one-off event, and it would drop nothing extra we need.
+      if (env.online) {
+        const r = openLink(env, serverIcsUrl(reminder), 'apple', 'Apple Calendar');
+        if (r.ok) return { ...r, message: 'Opening the event: tap "Add to Calendar" when it appears.' };
+      }
+      // offline / could not open: hand the on-device file over instead (share sheet -> Calendar, or download)
+      const fallback = await exportIcsCalendar(reminder, env);
+      return fallback.ok === false ? fallback : { ok: true, target, method: fallback.method, message: fallback.message };
+    }
+    case 'share': {
+      if (!canShareIcsFile(env)) {
+        return { ok: false, reason: 'unsupported', message: 'Sharing files is not supported in this browser. Choose another option or download the .ics file.' };
+      }
+      const r = await exportIcsCalendar(reminder, { ...env, isMobile: true }); // share path only; falls back to download inside
+      return r.ok === false ? r : { ok: true, target, method: r.method, message: r.message };
+    }
+    case 'ics':
+    default: {
+      // Explicit download: never opens the share sheet.
+      const r = await exportIcsCalendar(reminder, { ...env, isMobile: false, shareFile: undefined, canShareFile: undefined });
+      return r.ok === false ? r : { ok: true, target, method: r.method, message: r.message };
+    }
+  }
 }

@@ -34,6 +34,8 @@ import { ResetAndBackupModal } from './ResetAndBackupModal';
 import { validateAvatarFile, validateEmail } from '../lib/formValidation';
 import { disablePush } from '../lib/pushClient';
 import { resetAppData } from '../lib/resetData';
+import { loadDraft, pickStrings } from '../lib/persistedState';
+import { useDraftSaver } from '../lib/useUiState';
 
 interface ProfileScreenProps {
   userProfile: UserProfile;
@@ -50,6 +52,8 @@ interface ProfileScreenProps {
   /** In-app toast (replaces window.alert). */
   onShowToast?: (message: string) => void;
 }
+
+const PROFILE_DRAFT_FIELDS = ['profileName', 'profileEmail', 'profileAvatar', 'primaryHospital', 'insuranceProvider', 'policyNumber'] as const;
 
 const PRESET_AVATARS = [
   'https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=200&auto=format&fit=crop&q=80',
@@ -73,17 +77,19 @@ export const ProfileScreen: React.FC<ProfileScreenProps> = ({
   onSendTestPush,
   onShowToast,
 }) => {
-  const [isEditingProfile, setIsEditingProfile] = useState(false);
+  // An unsaved profile edit survives the app being backgrounded / discarded.
+  const [profileDraft] = useState(() => pickStrings(loadDraft('profileEdit'), PROFILE_DRAFT_FIELDS, 300_000));
+  const [isEditingProfile, setIsEditingProfile] = useState(() => Object.keys(profileDraft).length > 0);
   const [isPreferencesOpen, setIsPreferencesOpen] = useState(true);
   const [isResetModalOpen, setIsResetModalOpen] = useState(false);
   const [isSendingTest, setIsSendingTest] = useState(false);
   const [testCooldown, setTestCooldown] = useState(false);
-  const [profileName, setProfileName] = useState(userProfile.name);
-  const [profileEmail, setProfileEmail] = useState(userProfile.email);
-  const [profileAvatar, setProfileAvatar] = useState(userProfile.avatar);
-  const [primaryHospital, setPrimaryHospital] = useState(userProfile.primaryHospital);
-  const [insuranceProvider, setInsuranceProvider] = useState(userProfile.insuranceProvider);
-  const [policyNumber, setPolicyNumber] = useState(userProfile.policyNumber);
+  const [profileName, setProfileName] = useState(profileDraft.profileName ?? userProfile.name);
+  const [profileEmail, setProfileEmail] = useState(profileDraft.profileEmail ?? userProfile.email);
+  const [profileAvatar, setProfileAvatar] = useState(profileDraft.profileAvatar ?? userProfile.avatar);
+  const [primaryHospital, setPrimaryHospital] = useState(profileDraft.primaryHospital ?? userProfile.primaryHospital);
+  const [insuranceProvider, setInsuranceProvider] = useState(profileDraft.insuranceProvider ?? userProfile.insuranceProvider);
+  const [policyNumber, setPolicyNumber] = useState(profileDraft.policyNumber ?? userProfile.policyNumber);
 
   const [emailError, setEmailError] = useState<string | null>(null);
   const [avatarError, setAvatarError] = useState<string | null>(null);
@@ -95,8 +101,18 @@ export const ProfileScreen: React.FC<ProfileScreenProps> = ({
   const [newFamRelation, setNewFamRelation] = useState('Son');
   const [showAddFam, setShowAddFam] = useState(false);
 
+  const profileDirty = isEditingProfile && (
+    profileName !== userProfile.name || profileEmail !== userProfile.email || profileAvatar !== userProfile.avatar ||
+    primaryHospital !== userProfile.primaryHospital || insuranceProvider !== userProfile.insuranceProvider || policyNumber !== userProfile.policyNumber
+  );
+  // Data-URL avatars can be large: they are left out of the draft (the text fields are what people lose).
+  useDraftSaver('profileEdit', { profileName, profileEmail, profileAvatar: profileAvatar?.startsWith('data:') ? userProfile.avatar : profileAvatar, primaryHospital, insuranceProvider, policyNumber }, profileDirty);
+
   // Keep edit state synced if userProfile changes
+  const syncedProfile = useRef(userProfile);
   React.useEffect(() => {
+    if (syncedProfile.current === userProfile) return; // first render: keep any restored draft (also under StrictMode's double effect)
+    syncedProfile.current = userProfile;
     setProfileName(userProfile.name);
     setProfileEmail(userProfile.email);
     setProfileAvatar(userProfile.avatar);

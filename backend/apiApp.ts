@@ -82,6 +82,7 @@ export function createApiApp(pushDeps?: PushDeps, opts: ApiAppOptions = {}) {
         date: q('date'),
         time: q('time'),
         alarmMinutes: Number(q('alarm', '60')),
+        uid: q('uid').slice(0, 80) || undefined,
       });
       const filename = icsFilename(title);
 

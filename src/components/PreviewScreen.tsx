@@ -15,6 +15,8 @@ import {
 } from 'lucide-react';
 import { ExtractedDocData, UserProfile, Reminder } from '../types';
 import { selfMatchLabel } from '../lib/profileMatch';
+import { clearDraft, docSignature, loadDraft, mergeItems, packItems } from '../lib/persistedState';
+import { useDraftSaver } from '../lib/useUiState';
 
 interface PreviewScreenProps {
   extractedData: ExtractedDocData;
@@ -38,16 +40,25 @@ export const PreviewScreen: React.FC<PreviewScreenProps> = ({
     ? extractedData.extractedItems
     : [extractedData];
 
-  const [items, setItems] = useState<ExtractedDocData[]>(rawItems);
-  const [selectedIndex, setSelectedIndex] = useState<number>(0);
+  // Edits made before the app was backgrounded/discarded are re-applied to the SAME document (matched by a signature).
+  const sig = docSignature(rawItems);
+  const restoredDraft = useState(() => mergeItems(rawItems, loadDraft('previewEdit', sig)))[0];
+  const [items, setItems] = useState<ExtractedDocData[]>(restoredDraft?.items ?? rawItems);
+  const [selectedIndex, setSelectedIndex] = useState<number>(restoredDraft?.sel ?? 0);
+  const seenDoc = React.useRef(extractedData);
 
   useEffect(() => {
+    if (seenDoc.current === extractedData) return; // first render keeps the restored draft
+    seenDoc.current = extractedData;
     const list = (extractedData.extractedItems && extractedData.extractedItems.length > 0)
       ? extractedData.extractedItems
       : [extractedData];
     setItems(list);
     setSelectedIndex(0);
   }, [extractedData]);
+
+  const previewDirty = JSON.stringify(packItems(items, 0).items) !== JSON.stringify(packItems(rawItems, 0).items);
+  useDraftSaver('previewEdit', packItems(items, selectedIndex), previewDirty, sig);
 
   const activeItem = items[selectedIndex] || items[0] || extractedData;
 
@@ -100,6 +111,7 @@ export const PreviewScreen: React.FC<PreviewScreenProps> = ({
       };
     });
 
+    clearDraft('previewEdit');
     if (createdReminders.length === 1) {
       onCreateReminder(createdReminders[0]);
     } else {

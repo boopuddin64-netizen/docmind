@@ -16,6 +16,9 @@ import { SnoozePickerModal } from './components/SnoozePickerModal';
 import { applySnooze, snoozeLabel } from './lib/snooze';
 import { SecurityVaultModal } from './components/SecurityVaultModal';
 import { Header } from './components/Header';
+import { UpdateBanner } from './components/UpdateBanner';
+import { clearDraft, clearDrafts, flushPendingWrites, isDefaultSnapshot, persistableDoc, readSnapshot, writeSnapshot, type UiSnapshot } from './lib/persistedState';
+import { useFlushOnHide, useScrollMemory } from './lib/useUiState';
 import {
   NavigationTab,
   Reminder,
@@ -26,6 +29,7 @@ import {
 import { INITIAL_REMINDERS, INITIAL_USER_PROFILE } from './data/mockData';
 import { sanitizeAndValidateDocData } from './lib/sanitizer';
 import { checkForDuplicateReminder, generateCompositeDedupHash } from './lib/deduplication';
+import { formatTestNotification } from './lib/notificationText';
 import { checkUpcomingAlerts, closeNotificationsByTag, dispatchNativeNotification, requestNotificationPermission } from './lib/notifications';
 import { FIRED_STORAGE_KEY, loadPushFiredKeys, nextEventDelay, planAlerts, type FiredMap } from './lib/alertScheduler';
 import { disablePush, enablePush, isPushActive, pushSupported, sendTestPush } from './lib/pushClient';
@@ -33,8 +37,11 @@ import { DEFAULT_SECURITY_SETTINGS, createAuditLog } from './lib/securityVault';
 import { CheckCircle2, BellRing } from 'lucide-react';
 
 export default function App() {
-  const [showIntro, setShowIntro] = useState<boolean>(true);
-  const [currentTab, setCurrentTab] = useState<NavigationTab>('home');
+  // UI state saved by a previous run (the phone may have discarded the backgrounded page): put the user back where they were.
+  const [restored] = useState<UiSnapshot | undefined>(() => readSnapshot());
+  // Coming back to a recent session: no 2 s splash, straight to the screen the user left.
+  const [showIntro, setShowIntro] = useState<boolean>(() => !restored);
+  const [currentTab, setCurrentTab] = useState<NavigationTab>(() => restored?.tab ?? 'home');
 
   // Load state from local storage or defaults
   const [reminders, setReminders] = useState<Reminder[]>(() => {
@@ -132,8 +139,8 @@ export default function App() {
     const granted = await requestNotificationPermission();
     if (granted) {
       void dispatchNativeNotification(
-        'DocuMind Device Pop-Up Alert Test',
-        'Device notification pop-up system working successfully on this device!',
+        formatTestNotification(Date.now()).title,
+        formatTestNotification(Date.now()).body,
         undefined,
         'docmind-test'
       );
@@ -143,7 +150,7 @@ export default function App() {
     showToast('Testing Device Pop-Up Alert...');
   };
 
-  const [snoozePickerId, setSnoozePickerId] = useState<string | null>(null);
+  const [snoozePickerId, setSnoozePickerId] = useState<string | null>(() => (restored?.snoozePickerId && reminders.some((r) => r.id === restored.snoozePickerId) ? restored.snoozePickerId : null));
   /** Sends one REAL push (via the server, to this device's own subscription) so the user can see the closed-app pop-up behaviour. */
   const handleSendTestPush = async () => {
     setNotificationsEnabled(true);
@@ -164,18 +171,19 @@ export default function App() {
     else showToast('Test sent. Close or minimise the app: it should pop up on screen with a sound.', { durationMs: 8000 });
   };
 
-  const [activeSearchQuery, setActiveSearchQuery] = useState<string>('');
-  const [pendingExtractedDoc, setPendingExtractedDoc] = useState<ExtractedDocData | null>(null);
+  const [activeSearchQuery, setActiveSearchQuery] = useState<string>(() => restored?.search ?? '');
+  const [pendingExtractedDoc, setPendingExtractedDoc] = useState<ExtractedDocData | null>(() => (restored?.pendingDoc as ExtractedDocData | null) ?? null);
   
   // Modals & Drawers States
-  const [isUploadModalOpen, setIsUploadModalOpen] = useState<boolean>(false);
-  const [isAddManualOpen, setIsAddManualOpen] = useState<boolean>(false);
-  const [isHumanReviewOpen, setIsHumanReviewOpen] = useState<boolean>(false);
-  const [isDuplicateModalOpen, setIsDuplicateModalOpen] = useState<boolean>(false);
-  const [isNotificationDrawerOpen, setIsNotificationDrawerOpen] = useState<boolean>(false);
+  const [isUploadModalOpen, setIsUploadModalOpen] = useState<boolean>(() => restored?.upload ?? false);
+  const [isAddManualOpen, setIsAddManualOpen] = useState<boolean>(() => restored?.addManual ?? false);
+  const [isHumanReviewOpen, setIsHumanReviewOpen] = useState<boolean>(() => restored?.humanReview ?? false);
+  const [isDuplicateModalOpen, setIsDuplicateModalOpen] = useState<boolean>(() => restored?.duplicate?.open ?? false);
+  const [isNotificationDrawerOpen, setIsNotificationDrawerOpen] = useState<boolean>(() => restored?.notifications ?? false);
   const [isDeviceAlertPopupOpen, setIsDeviceAlertPopupOpen] = useState<boolean>(false);
-  const [isVaultModalOpen, setIsVaultModalOpen] = useState<boolean>(false);
-  const [hasAutoPromptedAlerts, setHasAutoPromptedAlerts] = useState<boolean>(false);
+  const [isVaultModalOpen, setIsVaultModalOpen] = useState<boolean>(() => restored?.vault ?? false);
+  // A restored session must not re-open the "urgent alerts" pop-up the user already saw.
+  const [hasAutoPromptedAlerts, setHasAutoPromptedAlerts] = useState<boolean>(() => !!restored);
   
   // Duplicate Intercept Data
   const [duplicateMatch, setDuplicateMatch] = useState<{
@@ -183,9 +191,49 @@ export default function App() {
     existingReminder: Reminder;
     similarityScore: number;
     reason: string;
-  } | null>(null);
+  } | null>(() => {
+    const d = restored?.duplicate;
+    const existing = d && reminders.find((r) => r.id === d.existingId);
+    return d && existing ? { newDoc: d.newDoc as ExtractedDocData, existingReminder: existing, similarityScore: d.similarityScore, reason: d.reason } : null;
+  });
 
-  const [selectedDetailReminder, setSelectedDetailReminder] = useState<Reminder | null>(null);
+  const [selectedDetailReminder, setSelectedDetailReminder] = useState<Reminder | null>(
+    () => (restored?.detailId ? reminders.find((r) => r.id === restored.detailId) ?? null : null),
+  );
+  // ── State retention: snapshot of the UI (screen, open modal, search, scroll) so a discarded/frozen page resumes where it was ──
+  const scrollMemory = useScrollMemory(currentTab, restored?.scroll ?? {});
+  const snapshotRef = useRef<UiSnapshot | null>(null);
+  snapshotRef.current = {
+    tab: currentTab,
+    scroll: scrollMemory.current,
+    search: activeSearchQuery,
+    detailId: selectedDetailReminder?.id ?? null,
+    snoozePickerId,
+    upload: isUploadModalOpen,
+    addManual: isAddManualOpen,
+    notifications: isNotificationDrawerOpen,
+    vault: isVaultModalOpen,
+    humanReview: isHumanReviewOpen,
+    pendingDoc: persistableDoc(pendingExtractedDoc),
+    duplicate: duplicateMatch
+      ? { newDoc: persistableDoc(duplicateMatch.newDoc) ?? {}, existingId: duplicateMatch.existingReminder.id, similarityScore: duplicateMatch.similarityScore, reason: duplicateMatch.reason, open: isDuplicateModalOpen }
+      : null,
+  };
+  const saveUiState = () => {
+    const snap = snapshotRef.current;
+    if (!snap) return;
+    const y = Math.round(window.scrollY);
+    if (y > 0) snap.scroll[snap.tab] = y;
+    writeSnapshot(snap);
+    flushPendingWrites();
+  };
+  // Save on every navigation-level change (cheap: a few hundred bytes) and again when the page is hidden / frozen.
+  useEffect(() => {
+    saveUiState();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [currentTab, activeSearchQuery, selectedDetailReminder?.id, snoozePickerId, isUploadModalOpen, isAddManualOpen, isNotificationDrawerOpen, isVaultModalOpen, isHumanReviewOpen, isDuplicateModalOpen, pendingExtractedDoc, duplicateMatch]);
+  useFlushOnHide(saveUiState);
+
   const [toast, setToast] = useState<{ message: string; actionLabel?: string; onAction?: () => void } | null>(null);
   const toastTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
@@ -456,6 +504,8 @@ export default function App() {
   };
 
   const handleDiscardPreview = () => {
+    clearDrafts('previewEdit');
+    clearDrafts('reviewEdit');
     setPendingExtractedDoc(null);
     setCurrentTab('home');
   };
@@ -571,6 +621,8 @@ export default function App() {
           notificationsEnabled={notificationsEnabled}
         />
       )}
+
+      <UpdateBanner />
 
       {/* Toast Notification */}
       {toast && (

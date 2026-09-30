@@ -13,10 +13,13 @@ import {
 } from 'lucide-react';
 import { ExtractedDocData, UserProfile } from '../types';
 import { preprocessDocumentImage } from '../lib/preprocessor';
-import { ScanError, downscaleImage, readScanResponse } from '../lib/scanClient';
+import { downscaleImage } from '../lib/scanClient';
+import { ScanError, classifyScanFailure, requestScan, type ScanFailure } from '../lib/scanErrors';
 import { PayloadTooLargeError, fitImageToBudget } from '../lib/largeFile';
 import { PrepareError, prepareLargeFile, type PreparedScan } from '../lib/prepareUpload';
 import { useEscapeKey } from '../lib/useEscapeKey';
+import { loadDraft, pickStrings } from '../lib/persistedState';
+import { useDraftSaver } from '../lib/useUiState';
 import { FILE_INPUT_ACCEPT, checkUploadFile, toDataUrl } from '../lib/uploadFormats';
 import { LARGE_FILE_THRESHOLD_BYTES } from '../lib/largeFile';
 
@@ -44,21 +47,35 @@ export const UploadModal: React.FC<UploadModalProps> = ({
 }) => {
   const [isScanning, setIsScanning] = useState(false);
   const [dragActive, setDragActive] = useState(false);
-  const [inputText, setInputText] = useState('');
+  const [inputText, setInputText] = useState(() => pickStrings(loadDraft('uploadText'), ['t'] as const, 2000).t ?? '');
   const [preprocessedStats, setPreprocessedStats] = useState<string | null>(null);
-  const [scanError, setScanError] = useState<string | null>(null);
+  const [scanError, setScanErrorText] = useState<string | null>(null);
+  const [scanFailure, setScanFailure] = useState<ScanFailure | null>(null);
+  // What "Retry" repeats: the last request payload, or (large files, which are read in the browser first) the whole file flow.
+  const retryRef = useRef<(() => void) | null>(null);
+  const setScanError = (message: string | null, failure: ScanFailure | null = null) => { setScanErrorText(message); setScanFailure(failure); };
+  const isOnline = () => typeof navigator === 'undefined' || navigator.onLine !== false;
   const [scanStatus, setScanStatus] = useState<string | null>(null);
   const lastPayloadRef = useRef<ScanPayload | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   useEscapeKey(isOpen, onClose);
+  useDraftSaver('uploadText', { t: inputText }, inputText.trim().length > 0);
 
   if (!isOpen) return null;
 
   const processScan = async (payload: ScanPayload) => {
     lastPayloadRef.current = payload;
+    retryRef.current = () => { void processScan(payload); };
     setScanError(null);
     setScanStatus(null);
+    // Offline: say so straight away instead of resizing a photo and then waiting for a request that cannot succeed.
+    if (!isOnline()) {
+      const failure = classifyScanFailure(new ScanError('offline', undefined, 'network', 'offline'), { online: false });
+      setScanError(failure.message, failure);
+      setIsScanning(false);
+      return;
+    }
     setIsScanning(true);
 
     try {
@@ -90,20 +107,15 @@ export const UploadModal: React.FC<UploadModalProps> = ({
         }
       }
 
-      const response = await fetch('/api/scan-document', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          documentText: payload.documentText,
-          imageBase64: finalBase64,
-          mimeType,
-          pageImages: payload.pageImages,
-          userName: userProfile.name,
-          familyMembers: userProfile.familyMembers.map((f) => ({ name: f.name })),
-        }),
+      // One request guarded by a timeout (AbortController); every failure comes back as a classified ScanError.
+      const data = await requestScan({
+        documentText: payload.documentText,
+        imageBase64: finalBase64,
+        mimeType,
+        pageImages: payload.pageImages,
+        userName: userProfile.name,
+        familyMembers: userProfile.familyMembers.map((f) => ({ name: f.name })),
       });
-
-      const data = await readScanResponse(response);
       onExtracted({
         ...data,
         // Images (and the first page of a scanned PDF) can be previewed as <img>; other formats fall back to the extracted-text preview.
@@ -115,11 +127,8 @@ export const UploadModal: React.FC<UploadModalProps> = ({
       onClose();
     } catch (err) {
       console.error('Scan failed:', err);
-      setScanError(
-        err instanceof ScanError
-          ? err.message
-          : 'Could not reach the scanner. Check your connection and try again.',
-      );
+      const failure = classifyScanFailure(err, { online: isOnline() });
+      setScanError(failure.message, failure);
       setIsScanning(false); // stay open: honest error state with Retry / Add manually
       setScanStatus(null);
     }
@@ -133,9 +142,16 @@ export const UploadModal: React.FC<UploadModalProps> = ({
     }
 
     // Large PDF / Word / Excel / CSV / TXT: read it here in the browser and upload only text (or a few page images).
+    retryRef.current = () => { void handleFileUpload(file); };
     if (check.kind !== 'image' && file.size > LARGE_FILE_THRESHOLD_BYTES) {
       lastPayloadRef.current = null;
       setScanError(null);
+      if (!isOnline()) {
+        // Reading happens on the device, but the result still has to be uploaded (and the reader libraries may need downloading).
+        const failure = classifyScanFailure(new ScanError('offline', undefined, 'network', 'offline'), { online: false });
+        setScanError(failure.message, failure);
+        return;
+      }
       setIsScanning(true);
       setScanStatus('Reading this large file on your device first…');
       try {
@@ -147,7 +163,9 @@ export const UploadModal: React.FC<UploadModalProps> = ({
         }
       } catch (err) {
         console.error('Large file preparation failed:', err);
-        setScanError(err instanceof PrepareError ? err.message : 'That file could not be read. Please choose another one.');
+        // A lazy reader chunk that could not be downloaded is a network problem (Retry helps); a bad file is not.
+        const failure = classifyScanFailure(err, { online: isOnline() });
+        setScanError(failure.kind === 'unknown' ? 'That file could not be read. Please choose another one.' : failure.message, failure);
         setIsScanning(false);
         setScanStatus(null);
         return;
@@ -232,20 +250,24 @@ export const UploadModal: React.FC<UploadModalProps> = ({
               <AlertTriangle className="w-7 h-7 text-rose-600 dark:text-rose-400" />
             </div>
             <div>
-              <h3 className="text-base font-bold text-[#191c1d] dark:text-white">Scan failed</h3>
+              <h3 className="text-base font-bold text-[#191c1d] dark:text-white" id="scan-error-title">
+                {scanFailure?.kind === 'network' ? 'Connection problem' : scanFailure?.kind === 'too-large' ? 'File too large' : scanFailure?.kind === 'unsupported' ? 'Cannot read this file' : 'Scan failed'}
+              </h3>
               <p className="text-xs text-[#3f4945] dark:text-sky-300/80 mt-1 max-w-xs">{scanError}</p>
               <p className="text-[11px] text-[#707975] dark:text-sky-300/60 mt-2 max-w-xs">
-                Nothing was saved. You can try again or enter the reminder yourself.
+                {scanFailure?.kind === 'network'
+                  ? 'Your document was not lost. Reconnect, then tap Retry, or enter the reminder yourself.'
+                  : 'Nothing was saved. You can try again or enter the reminder yourself.'}
               </p>
             </div>
             <div className="flex flex-col sm:flex-row gap-2 w-full">
               <button
                 type="button"
-                onClick={() => lastPayloadRef.current ? processScan(lastPayloadRef.current) : setScanError(null)}
+                onClick={() => (retryRef.current && (scanFailure ? scanFailure.retryable : true) ? retryRef.current() : setScanError(null))}
                 className="flex-1 bg-[#0284c7] dark:bg-sky-600 text-white text-xs font-bold px-4 py-2.5 rounded-xl hover:bg-[#0369a1] dark:hover:bg-sky-500 flex items-center justify-center gap-1.5"
                 id="btn-scan-retry"
               >
-                <RotateCcw className="w-4 h-4" /> Retry
+                <RotateCcw className="w-4 h-4" /> {scanFailure && !scanFailure.retryable ? 'Choose another file' : 'Retry'}
               </button>
               <button
                 type="button"

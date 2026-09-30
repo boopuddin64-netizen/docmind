@@ -174,9 +174,11 @@ export const SwipeableReminderCard: React.FC<SwipeableReminderCardProps> = ({
 
             <div className="flex items-center gap-2">
               <button
+                type="button"
                 onClick={() => exportCalendar(rem)}
+                aria-haspopup="dialog"
                 className="p-1.5 text-[#3f4945] dark:text-sky-300 hover:text-[#0284c7] hover:bg-[#f2f4f5] dark:hover:bg-sky-900/40 rounded-lg"
-                title="Download iCal Event"
+                title="Add to calendar"
                 aria-label={`Add ${rem.eventTitle} to calendar`}
                 id={`btn-export-ical-${rem.id}`}
               >

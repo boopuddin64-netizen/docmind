@@ -150,7 +150,7 @@ test('dispatch: heads-up then due are two pushes with the same tag; completed/de
   await syncReminders(deps, { subscriptionId: id, reminders: [{ id: 'r1', title: 'Flight', dueAt, leadMinutes: 60 }] }, auth);
   now.t = dueAt + 1000;
   await dispatchDue(deps);
-  assert.deepEqual(sent.map((x) => x.payload.reminderId + ':' + x.payload.body), ['r1:Due in 30 minute(s)', 'r2:Due in 30 minute(s)', 'r1:Due now']);
+  assert.deepEqual(sent.map((x) => x.payload.reminderId + ':' + x.payload.body.replace(/^Due: .* \(/, '(')), ['r1:(in 30 minutes)', 'r2:(in 30 minutes)', 'r1:(now)']);
   assert.ok(sent.every((x) => x.payload.tag === x.payload.reminderId));
 });
 
@@ -166,7 +166,7 @@ test('dispatch: snooze pushes the alert back, and re-sync after snooze does not 
   now.t = dueAt + 3600_000 + 1000;
   await dispatchDue(deps);
   assert.equal(sent.length, 1);
-  assert.equal(sent[0].payload.body, 'Snoozed reminder is due now');
+  assert.match(sent[0].payload.body, /^Due: .*\nSnoozed reminder$/);
   await syncReminders(deps, { subscriptionId: id, reminders: [{ ...base, snoozedUntil: dueAt + 3600_000 }] }, auth); // client re-sync
   await dispatchDue(deps);
   assert.equal(sent.length, 1);

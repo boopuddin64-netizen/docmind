@@ -62,7 +62,7 @@ test('dispatch: reminders are sent high urgency with the reminder TTL', async ()
   assert.equal(sent[0].opts.urgency, 'high');
   assert.equal(sent[0].opts.ttl, REMINDER_PUSH_TTL_SECONDS);
   assert.equal(sent[0].payload.title, 'Rent');
-  assert.equal(sent[0].payload.body, 'Due now');
+  assert.match(sent[0].payload.body, /^Due: .* \(now\)$/);
 });
 
 // ───────── 4. test push endpoint ─────────
@@ -299,9 +299,9 @@ test('sw: the event is marked delivered only AFTER the notification was shown; a
   assert.deepEqual(sw2.cacheWrites, []);
 });
 
-test('sw: cache name is v8 (one above the base branch v7)', async () => {
+test('sw: cache name is v9 (one above v8)', async () => {
   const sw = await loadSw();
-  assert.equal(sw.cacheName, 'docmind-pwa-v8');
+  assert.equal(sw.cacheName, 'docmind-pwa-v9');
   assert.match(sw.src, /"\/badge-96\.png"/, 'badge is precached');
 });
 
@@ -333,4 +333,22 @@ test('sw: with the app already open, snooze focuses it and posts the action; don
   assert.equal(msgs[2].action, 'done');
   assert.equal(focused, 2);
   assert.deepEqual(sw.opened, []);
+});
+
+test('sw: multi-line body kept (max 3 lines), control chars stripped, over-long lines and titles cut with an ellipsis; actions/tag/badge unchanged', async () => {
+  const sw = await loadSw();
+  await sw.push({
+    title: 'Bill: Electricity\u0000\n' + 'T'.repeat(200),
+    body: 'Due: Thu, 15 Oct 2026 at 9:30 AM (in 1 hour)\n₦45,000 · Ikeja Electric\n' + 'x'.repeat(300) + '\nfourth line',
+    reminderId: 'rem-9', tag: 'rem-9',
+  });
+  const { title, options } = sw.shown[0];
+  assert.ok(title.startsWith('Bill: Electricity T') && title.endsWith('…') && Array.from(title).length <= 80);
+  const lines = options.body.split('\n');
+  assert.equal(lines.length, 3);
+  assert.equal(lines[0], 'Due: Thu, 15 Oct 2026 at 9:30 AM (in 1 hour)');
+  assert.ok(lines[2].endsWith('…') && Array.from(lines[2]).length <= 90);
+  assert.equal(options.tag, 'rem-9');
+  assert.deepEqual(options.actions.map((a: any) => a.action), ['snooze', 'done']);
+  assert.equal(options.badge, NOTIFICATION_BADGE);
 });

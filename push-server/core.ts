@@ -13,6 +13,7 @@ import {
   eligibleEvents,
   type SyncedReminder,
 } from '../src/lib/schedule.js';
+import { MAX_DETAIL_CHARS, MAX_LINE_CHARS, categoryLabel, formatTestNotification, truncateText } from '../src/lib/notificationText.js';
 import {
   CLAIM_LEASE_SECONDS,
   SENT_TTL_SECONDS,
@@ -161,20 +162,29 @@ export function validateReminders(raw: unknown): ValidatedReminders | null {
   let skipped = 0;
   for (const r of raw) {
     if (!r || typeof r !== 'object') { skipped++; continue; }
-    const { id, title, dueAt, leadMinutes, snoozedUntil } = r as Record<string, unknown>;
+    const { id, title, dueAt, leadMinutes, snoozedUntil, category, detail, allDay } = r as Record<string, unknown>;
     if (typeof id !== 'string' || !id || id.length > 100) { skipped++; continue; }
     if (typeof dueAt !== 'number' || !Number.isFinite(dueAt) || dueAt < 0 || dueAt > MAX_DUE_AT_MS) { skipped++; continue; }
     const lead = leadMinutes === undefined ? undefined : Number(leadMinutes);
     if (lead !== undefined && (!Number.isFinite(lead) || lead < 0 || lead > MAX_LEAD_MINUTES)) { skipped++; continue; }
     const sn = snoozedUntil == null ? null : Number(snoozedUntil);
     if (sn !== null && !Number.isFinite(sn)) { skipped++; continue; }
-    byId.set(id, {
+    const item: SyncedReminder = {
       id,
       title: (typeof title === 'string' ? title : 'Reminder').slice(0, MAX_TITLE_LENGTH),
       dueAt: Math.floor(dueAt),
       leadMinutes: clampLeadMinutes(lead),
       snoozedUntil: sn === null ? null : Math.floor(sn),
-    });
+    };
+    // Optional display-only fields: sanitised and bounded here too (the client is not trusted).
+    const cat = typeof category === 'string' ? categoryLabel(category) : '';
+    if (cat) item.category = cat;
+    if (typeof detail === 'string') {
+      const d = detail.split(/\r\n|\r|\n/).map((l) => truncateText(l, MAX_LINE_CHARS)).filter(Boolean).slice(0, 2).join('\n').slice(0, MAX_DETAIL_CHARS);
+      if (d) item.detail = d;
+    }
+    if (allDay === true) item.allDay = true;
+    byId.set(id, item);
   }
   return { reminders: [...byId.values()], skipped };
 }
@@ -273,15 +283,16 @@ export interface TestPushPayload {
   url: string;
 }
 
-export function buildTestPayload(now: number): TestPushPayload {
+export function buildTestPayload(now: number, tzOffsetMinutes?: number): TestPushPayload {
+  const text = formatTestNotification(now, tzOffsetMinutes);
   return {
     v: 1,
     test: true,
     // Unique tag: every test is its own notification, never a silent replacement of the previous one.
     tag: `docmind-test-${now}`,
     reminderId: '',
-    title: 'DocuMind test alert',
-    body: 'If this popped up on your screen with a sound, your alerts are set up correctly.',
+    title: text.title,
+    body: text.body,
     url: '/',
   };
 }
@@ -306,7 +317,7 @@ export async function sendTestPush(deps: PushDeps, body: any, authHeader: string
   const sender = deps.sender ?? createWebPushSender(deps.config);
   try {
     await withTimeout(
-      sender(stored.subscription, JSON.stringify(buildTestPayload(now)), {
+      sender(stored.subscription, JSON.stringify(buildTestPayload(now, (await deps.store.getReminders(stored.id))?.tzOffsetMinutes)), {
         ttl: TEST_PUSH_TTL_SECONDS,
         urgency: 'high',
         timeoutMs: deps.config.sendTimeoutMs,
@@ -358,8 +369,8 @@ export interface PushPayload {
   url: string;
 }
 
-export function buildPayload(ev: ReturnType<typeof eligibleEvents>[number], now: number, cfg: PushConfig): PushPayload {
-  const d = describeEvent(ev, now);
+export function buildPayload(ev: ReturnType<typeof eligibleEvents>[number], now: number, cfg: PushConfig, tzOffsetMinutes?: number): PushPayload {
+  const d = describeEvent(ev, now, tzOffsetMinutes);
   return {
     v: 1,
     tag: ev.id,
@@ -490,7 +501,7 @@ export async function dispatchDue(deps: PushDeps): Promise<DispatchSummary> {
       }
       try {
         await withTimeout(
-          sender(sub.subscription, JSON.stringify(buildPayload(ev, now, config)), {
+          sender(sub.subscription, JSON.stringify(buildPayload(ev, now, config, data.tzOffsetMinutes)), {
             ttl: REMINDER_PUSH_TTL_SECONDS,
             urgency: 'high',
             topic: ev.id.replace(/[^A-Za-z0-9_-]/g, '').slice(0, 32) || undefined,

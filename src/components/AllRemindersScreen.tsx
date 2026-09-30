@@ -16,7 +16,9 @@ import {
 } from 'lucide-react';
 import { Reminder, ReminderCategory, UserProfile } from '../types';
 import { SwipeableReminderCard } from './SwipeableReminderCard';
-import { exportIcsCalendar } from '../lib/icalHelper';
+import { CalendarExportSheet } from './CalendarExportSheet';
+import { loadDraft, pickStrings } from '../lib/persistedState';
+import { useDraftSaver } from '../lib/useUiState';
 
 interface AllRemindersScreenProps {
   reminders: Reminder[];
@@ -41,13 +43,18 @@ export const AllRemindersScreen: React.FC<AllRemindersScreenProps> = ({
   onAddNewManual,
   onBackToHome,
 }) => {
-  const [searchQuery, setSearchQuery] = useState(initialSearchQuery);
-  const [selectedCategory, setSelectedCategory] = useState<string>('All');
-  const [selectedPatient, setSelectedPatient] = useState<string>('All');
-  const [showCompleted, setShowCompleted] = useState<boolean>(false);
+  // Filters survive tab switches and the app being backgrounded / discarded. An explicit search from Home wins over the stored one.
+  const [savedView] = useState(() => loadDraft<{ q?: string; c?: string; p?: string; done?: boolean }>('remindersView') ?? {});
+  const [searchQuery, setSearchQuery] = useState(initialSearchQuery || pickStrings(savedView, ['q'] as const, 200).q || '');
+  const [selectedCategory, setSelectedCategory] = useState<string>(pickStrings(savedView, ['c'] as const, 60).c || 'All');
+  const [selectedPatient, setSelectedPatient] = useState<string>(pickStrings(savedView, ['p'] as const, 120).p || 'All');
+  const [showCompleted, setShowCompleted] = useState<boolean>(savedView.done === true);
+  useDraftSaver('remindersView', { q: searchQuery, c: selectedCategory, p: selectedPatient, done: showCompleted }, !!searchQuery || selectedCategory !== 'All' || selectedPatient !== 'All' || showCompleted);
 
   // Sync initial search query only when prop changes explicitly
+  const firstSync = React.useRef(true);
   useEffect(() => {
+    if (firstSync.current) { firstSync.current = false; return; } // mount: the initial value (or restored view) is already applied
     setSearchQuery(initialSearchQuery);
   }, [initialSearchQuery]);
 
@@ -194,12 +201,11 @@ export const AllRemindersScreen: React.FC<AllRemindersScreenProps> = ({
     return matchedCount === terms.length || (terms.length >= 3 && matchedCount >= Math.ceil(terms.length * 0.75));
   });
 
-  const exportCalendar = async (rem: Reminder) => {
-    const r = await exportIcsCalendar(rem);
-    onShowToast?.(r.message);
-  };
+  const [exportTarget, setExportTarget] = React.useState<Reminder | null>(null);
+  const exportCalendar = (rem: Reminder) => setExportTarget(rem);
 
   return (
+    <>
     <div className="flex flex-col min-h-screen bg-[#f8fafb] dark:bg-[#07131e] pb-36 px-4 sm:px-6 pt-4">
       {/* Top Title & Quick Add Header */}
       <div className="flex items-center justify-between mb-4">
@@ -363,5 +369,7 @@ export const AllRemindersScreen: React.FC<AllRemindersScreenProps> = ({
         )}
       </div>
     </div>
+    <CalendarExportSheet reminder={exportTarget} onClose={() => setExportTarget(null)} onShowToast={onShowToast} />
+    </>
   );
 };

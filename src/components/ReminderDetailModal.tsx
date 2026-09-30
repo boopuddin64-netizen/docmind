@@ -17,11 +17,16 @@ import {
 } from 'lucide-react';
 import { Reminder, ReminderCategory, UserProfile } from '../types';
 import { selfMatchLabel } from '../lib/profileMatch';
-import { exportIcsCalendar } from '../lib/icalHelper';
+import { CalendarExportSheet } from './CalendarExportSheet';
 import { validateDateField, validateTimeField } from '../lib/dateInput';
 import { FIELD_LIMITS, clamp } from '../lib/formValidation';
 import { useEscapeKey } from '../lib/useEscapeKey';
+import { clearDraft, loadDraft, pickStrings } from '../lib/persistedState';
+import { useDraftSaver } from '../lib/useUiState';
 import { SnoozeOptions } from './SnoozeOptions';
+
+const EDIT_DRAFT = 'reminderEdit';
+const EDIT_FIELDS = ['eventTitle', 'category', 'patientName', 'hospitalName', 'appointmentDate', 'appointmentTime', 'diagnosis', 'shortNote'] as const;
 
 interface ReminderDetailModalProps {
   reminder: Reminder | null;
@@ -57,27 +62,38 @@ export const ReminderDetailModal: React.FC<ReminderDetailModalProps> = ({
   const [shortNote, setShortNote] = React.useState<string>(reminder?.shortNote ?? '');
 
   const [confirmingDelete, setConfirmingDelete] = React.useState<boolean>(false);
+  const [showExportSheet, setShowExportSheet] = React.useState<boolean>(false);
   const [errors, setErrors] = React.useState<{ date?: string; time?: string; title?: string; export?: string }>({});
 
   // Escape closes the delete confirmation first, then the dialog.
-  useEscapeKey(!!reminder, () => (confirmingDelete ? setConfirmingDelete(false) : onClose()));
+  useEscapeKey(!!reminder && !showExportSheet, () => (confirmingDelete ? setConfirmingDelete(false) : onClose()));
 
-  // Sync edit state if reminder prop changes
+  // Sync edit state if reminder prop changes. If an unsaved edit of THIS reminder was stored (the app was backgrounded/discarded
+  // mid-edit), the edit form re-opens with that text instead of the saved values.
   React.useEffect(() => {
     if (reminder) {
-      setEventTitle(reminder.eventTitle);
-      setCategory(reminder.category);
-      setPatientName(reminder.patientName);
-      setHospitalName(reminder.hospitalName);
-      setAppointmentDate(reminder.appointmentDate);
-      setAppointmentTime(reminder.appointmentTime);
-      setDiagnosis(reminder.diagnosis);
-      setShortNote(reminder.shortNote);
-      setIsEditing(false);
+      const d = pickStrings(loadDraft(EDIT_DRAFT, reminder.id), EDIT_FIELDS);
+      const restoredEdit = Object.keys(d).length > 0;
+      setEventTitle(d.eventTitle ?? reminder.eventTitle);
+      setCategory((d.category as ReminderCategory) ?? reminder.category);
+      setPatientName(d.patientName ?? reminder.patientName);
+      setHospitalName(d.hospitalName ?? reminder.hospitalName);
+      setAppointmentDate(d.appointmentDate ?? reminder.appointmentDate);
+      setAppointmentTime(d.appointmentTime ?? reminder.appointmentTime);
+      setDiagnosis(d.diagnosis ?? reminder.diagnosis);
+      setShortNote(d.shortNote ?? reminder.shortNote);
+      setIsEditing(restoredEdit);
       setConfirmingDelete(false);
       setErrors({});
     }
   }, [reminder]);
+
+  const editDirty = !!reminder && isEditing && (
+    eventTitle !== reminder.eventTitle || category !== reminder.category || patientName !== reminder.patientName ||
+    hospitalName !== reminder.hospitalName || appointmentDate !== reminder.appointmentDate || appointmentTime !== reminder.appointmentTime ||
+    diagnosis !== reminder.diagnosis || shortNote !== reminder.shortNote
+  );
+  useDraftSaver(EDIT_DRAFT, { eventTitle, category, patientName, hospitalName, appointmentDate, appointmentTime, diagnosis, shortNote }, editDirty, reminder?.id);
 
   // Hooks must run on every render, so the null guard lives after them (Rules of Hooks).
   if (!reminder) return null;
@@ -106,17 +122,18 @@ export const ReminderDetailModal: React.FC<ReminderDetailModalProps> = ({
       shortNote: clamp(shortNote, FIELD_LIMITS.note),
     };
     onUpdateReminder(updated);
+    clearDraft(EDIT_DRAFT);
     setIsEditing(false);
   };
 
-  const exportCalendar = async () => {
+  const exportCalendar = () => {
     if (!reminder) return;
-    const r = await exportIcsCalendar(reminder);
-    setErrors((p) => ({ ...p, export: r.ok === false && r.reason !== 'cancelled' ? r.message : undefined }));
-    onShowToast?.(r.message);
+    setErrors((p) => ({ ...p, export: undefined }));
+    setShowExportSheet(true);
   };
 
   return (
+    <>
     <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-xs flex items-center justify-center p-4">
       <div
         role="dialog"
@@ -434,12 +451,14 @@ export const ReminderDetailModal: React.FC<ReminderDetailModalProps> = ({
           )}
           <div className="grid grid-cols-2 gap-2">
             <button
+              type="button"
               onClick={exportCalendar}
+              aria-haspopup="dialog"
               className="bg-white dark:bg-transparent border border-[#005faf] dark:border-sky-500 text-[#005faf] dark:text-sky-300 hover:bg-[#54a0fe]/10 py-2.5 rounded-full font-bold text-xs flex items-center justify-center gap-1.5"
               id="btn-modal-export-ical"
             >
               <Download className="w-4 h-4" />
-              <span>Export iCal</span>
+              <span>Add to calendar</span>
             </button>
 
             <button
@@ -455,5 +474,7 @@ export const ReminderDetailModal: React.FC<ReminderDetailModalProps> = ({
         </div>
       </div>
     </div>
+    <CalendarExportSheet reminder={showExportSheet ? reminder : null} onClose={() => setShowExportSheet(false)} onShowToast={onShowToast} />
+    </>
   );
 };
