@@ -1,6 +1,6 @@
 {
   "packageId": "app.docmind.pwa",
-  "host": "ais-pre-t77j6qf3w5b7n62rgujiah-110028292431.europe-west1.run.app",
+  "host": "docmind-sage.vercel.app",
   "name": "DocuMind - Smart AI Scanner & Reminder",
   "launcherName": "DocuMind",
   "display": "standalone",
@@ -12,8 +12,8 @@
   "backgroundColor": "#00382E",
   "enableNotifications": true,
   "startUrl": "/",
-  "iconUrl": "https://ais-pre-t77j6qf3w5b7n62rgujiah-110028292431.europe-west1.run.app/icon-512.png",
-  "maskableIconUrl": "https://ais-pre-t77j6qf3w5b7n62rgujiah-110028292431.europe-west1.run.app/icon-maskable-512.png",
+  "iconUrl": "https://docmind-sage.vercel.app/icon-512.png",
+  "maskableIconUrl": "https://docmind-sage.vercel.app/icon-maskable-512.png",
   "appVersionName": "1.0.0",
   "appVersionCode": 1,
   "signingKey": {
@@ -22,7 +22,7 @@
   },
   "splashScreenFadeOutDuration": 300,
   "generatorApp": "bubblewrap-cli",
-  "webManifestUrl": "https://ais-pre-t77j6qf3w5b7n62rgujiah-110028292431.europe-west1.run.app/manifest.json",
+  "webManifestUrl": "https://docmind-sage.vercel.app/manifest.json",
   "fallbackType": "customtabs",
   "features": {},
   "alphaDependencies": {
@@ -31,5 +31,5 @@
   "enableSiteSettingsShortcut": "true",
   "isChromeOSOnly": false,
   "isLlamaPack": false,
-  "pwaUrl": "https://ais-pre-t77j6qf3w5b7n62rgujiah-110028292431.europe-west1.run.app/"
+  "pwaUrl": "https://docmind-sage.vercel.app/"
 }

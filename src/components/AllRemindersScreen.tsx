@@ -25,6 +25,7 @@ interface AllRemindersScreenProps {
   onSelectReminder: (reminder: Reminder) => void;
   onToggleComplete: (id: string) => void;
   onDeleteReminder: (id: string) => void;
+  onShowToast?: (message: string) => void;
   onAddNewManual: () => void;
   onBackToHome: () => void;
 }
@@ -36,6 +37,7 @@ export const AllRemindersScreen: React.FC<AllRemindersScreenProps> = ({
   onSelectReminder,
   onToggleComplete,
   onDeleteReminder,
+  onShowToast,
   onAddNewManual,
   onBackToHome,
 }) => {
@@ -193,7 +195,9 @@ export const AllRemindersScreen: React.FC<AllRemindersScreenProps> = ({
   });
 
   const exportCalendar = (rem: Reminder) => {
-    downloadIcsCalendar(rem);
+    if (!downloadIcsCalendar(rem)) {
+      onShowToast?.('Can not export: this reminder has no valid date. Edit the date first.');
+    }
   };
 
   return (
@@ -236,6 +240,7 @@ export const AllRemindersScreen: React.FC<AllRemindersScreenProps> = ({
               onClick={() => setSearchQuery('')}
               className="absolute right-3 top-3 text-[#707975] dark:text-sky-300 hover:text-[#191c1d] p-0.5 rounded-full hover:bg-gray-100 dark:hover:bg-sky-900"
               title="Clear search"
+              aria-label="Clear search"
             >
               <X className="w-4 h-4" />
             </button>

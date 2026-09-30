@@ -91,6 +91,8 @@ export const Header: React.FC<HeaderProps> = ({
             onClick={onToggleDarkMode}
             className="p-2 rounded-full text-[#0369a1] dark:text-sky-200 hover:bg-sky-100/60 dark:hover:bg-sky-900/50 transition-colors"
             title={isDarkMode ? 'Switch to Light Mode' : 'Switch to Dark Mode'}
+            aria-label={isDarkMode ? 'Switch to light mode' : 'Switch to dark mode'}
+            aria-pressed={isDarkMode}
             id="btn-toggle-darkmode"
           >
             {isDarkMode ? (
@@ -107,6 +109,7 @@ export const Header: React.FC<HeaderProps> = ({
             onClick={onOpenVault}
             className="p-2 rounded-full text-[#0369a1] dark:text-sky-200 hover:bg-sky-100/60 dark:hover:bg-sky-900/50 transition-colors"
             title="Open Security & Privacy Vault"
+            aria-label="Open security and privacy vault"
             id="btn-header-vault"
           >
             <Lock className="w-5 h-5 text-[#0369a1] dark:text-sky-200" />
@@ -119,6 +122,10 @@ export const Header: React.FC<HeaderProps> = ({
             onClick={onOpenNotifications}
             className="p-2 rounded-full text-[#0369a1] dark:text-sky-200 hover:bg-sky-100/60 dark:hover:bg-sky-900/50 transition-colors relative"
             title={notificationsEnabled ? 'Notification Center' : 'Notification Center (Muted)'}
+            aria-label={
+              (notificationsEnabled ? 'Open notification center' : 'Open notification center (muted)') +
+              (notificationsEnabled && alertCount > 0 ? `, ${alertCount} alert${alertCount === 1 ? '' : 's'}` : '')
+            }
             id="btn-header-notifications"
           >
             {notificationsEnabled ? (

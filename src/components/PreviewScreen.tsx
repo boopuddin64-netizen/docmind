@@ -1,3 +1,5 @@
+import { validateDateField, validateTimeField } from '../lib/dateInput';
+import { FIELD_LIMITS } from '../lib/formValidation';
 import React, { useState, useEffect } from 'react';
 import {
   ArrowLeft,
@@ -55,8 +57,25 @@ export const PreviewScreen: React.FC<PreviewScreenProps> = ({
     );
   };
 
+  const [dateErrors, setDateErrors] = useState<Record<number, string>>({});
+
   const handleCreate = () => {
-    const createdReminders: Reminder[] = items.map((item, idx) => {
+    const errs: Record<number, string> = {};
+    const normalized = items.map((item, idx) => {
+      const d = validateDateField(item.appointmentDate || '');
+      const t = validateTimeField(item.appointmentTime || '');
+      if (!d.ok) errs[idx] = d.error || 'Enter a valid date.';
+      else if (!t.ok) errs[idx] = t.error || 'Enter a valid time.';
+      return { ...item, appointmentDate: d.value || item.appointmentDate, appointmentTime: t.value || item.appointmentTime };
+    });
+    setDateErrors(errs);
+    const firstBad = Object.keys(errs).map(Number)[0];
+    if (firstBad !== undefined) {
+      setSelectedIndex(firstBad);
+      return;
+    }
+    const validItems = normalized;
+    const createdReminders: Reminder[] = validItems.map((item, idx) => {
       const pName = item.patientName || userProfile.name;
       const isSelf =
         pName.toLowerCase().trim() === userProfile.name.toLowerCase().trim() ||
@@ -69,13 +88,13 @@ export const PreviewScreen: React.FC<PreviewScreenProps> = ({
         patientName: pName,
         patientMatch: isSelf ? "Matches Profile: Self" : "Matches Profile: Household",
         diagnosis: item.diagnosis || "Document Review & Action Item",
-        appointmentDate: item.appointmentDate || new Date().toLocaleDateString('en-GB'),
+        appointmentDate: item.appointmentDate,
         appointmentTime: item.appointmentTime || "08:00 AM",
         shortNote: item.shortNote || "Review extracted document action items.",
         fullText: item.fullText || `${item.eventTitle} - ${item.shortNote}`,
         category: item.category || "General",
         status: "Confirmed",
-        accuracy: item.accuracy || 98,
+        accuracy: item.accuracy || 60,
         createdAt: new Date().toISOString(),
         isCompleted: false,
       };
@@ -194,7 +213,7 @@ export const PreviewScreen: React.FC<PreviewScreenProps> = ({
             <div className="text-sm text-[#191c1d] dark:text-slate-200 leading-relaxed">
               <span className="text-[#3f4945] dark:text-sky-300/70">Scheduled for </span>
               <span className="font-bold text-[#0369a1] dark:text-sky-300 bg-[#e0f2fe] dark:bg-sky-900/50 px-1.5 py-0.5 rounded border-b-2 border-[#0284c7]">
-                {activeItem.appointmentDate || new Date().toLocaleDateString('en-GB')}
+                {activeItem.appointmentDate || 'Date needed'}
               </span>
               <span className="text-[#3f4945] dark:text-sky-300/70"> at {activeItem.appointmentTime || "08:00 AM"}.</span>
             </div>
@@ -237,6 +256,7 @@ export const PreviewScreen: React.FC<PreviewScreenProps> = ({
                 type="text"
                 value={activeItem.eventTitle || ""}
                 onChange={(e) => updateActiveField('eventTitle', e.target.value)}
+                maxLength={FIELD_LIMITS.title}
                 className="w-full bg-[#f2f4f5] dark:bg-[#0c1e2e] border border-[#e1e3e4] dark:border-sky-900/50 rounded-xl px-4 py-3 text-sm text-[#191c1d] dark:text-white font-semibold pr-10 focus:outline-none focus:ring-2 focus:ring-[#0284c7]"
                 id="input-event-title"
               />
@@ -253,12 +273,21 @@ export const PreviewScreen: React.FC<PreviewScreenProps> = ({
               <input
                 type="text"
                 value={activeItem.appointmentDate || ""}
-                onChange={(e) => updateActiveField('appointmentDate', e.target.value)}
+                onChange={(e) => {
+                  updateActiveField('appointmentDate', e.target.value);
+                  if (dateErrors[selectedIndex]) setDateErrors((p) => ({ ...p, [selectedIndex]: '' }));
+                }}
+                maxLength={20}
+                placeholder="DD/MM/YYYY"
+                aria-invalid={!!dateErrors[selectedIndex]}
                 className="w-full bg-[#f2f4f5] dark:bg-[#0c1e2e] border border-[#e1e3e4] dark:border-sky-900/50 rounded-xl px-4 py-3 text-sm text-[#191c1d] dark:text-white font-semibold pr-10 focus:outline-none focus:ring-2 focus:ring-[#0284c7]"
                 id="input-reminder-date"
               />
               <Calendar className="w-5 h-5 text-[#3f4945] dark:text-sky-300 absolute right-3 pointer-events-none" />
             </div>
+            {dateErrors[selectedIndex] && (
+              <p role="alert" className="text-[11px] font-semibold text-rose-600 dark:text-rose-400">{dateErrors[selectedIndex]}</p>
+            )}
           </div>
 
           {/* Person's Name Field */}
@@ -311,6 +340,7 @@ export const PreviewScreen: React.FC<PreviewScreenProps> = ({
               rows={3}
               value={activeItem.shortNote || ""}
               onChange={(e) => updateActiveField('shortNote', e.target.value)}
+              maxLength={FIELD_LIMITS.note}
               className="w-full bg-[#f2f4f5] dark:bg-[#0c1e2e] border border-[#e1e3e4] dark:border-sky-900/50 rounded-xl p-3.5 text-sm text-[#191c1d] dark:text-white font-normal focus:outline-none focus:ring-2 focus:ring-[#0284c7] resize-none"
               id="input-short-note"
             />

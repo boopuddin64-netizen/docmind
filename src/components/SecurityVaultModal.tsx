@@ -2,6 +2,7 @@ import React, { useState } from 'react';
 import { Reminder, SecuritySettings } from '../types';
 import { autoPurgeOldDocuments } from '../lib/securityVault';
 import { Shield, Lock, Key, Users, Trash2, CheckCircle2, History, X, Sparkles, HardDrive } from 'lucide-react';
+import { useEscapeKey } from '../lib/useEscapeKey';
 
 interface SecurityVaultModalProps {
   isOpen: boolean;
@@ -20,6 +21,7 @@ export const SecurityVaultModal: React.FC<SecurityVaultModalProps> = ({
   reminders,
   onPurgeOldScans,
 }) => {
+  useEscapeKey(isOpen, onClose);
   if (!isOpen) return null;
 
   const [activeTab, setActiveTab] = useState<'vault' | 'logs'>('vault');
@@ -53,7 +55,7 @@ export const SecurityVaultModal: React.FC<SecurityVaultModalProps> = ({
 
   return (
     <div className="fixed inset-0 z-50 bg-black/70 backdrop-blur-xs flex items-center justify-center p-4 overflow-y-auto">
-      <div className="bg-white dark:bg-[#0c1e2e] w-full max-w-md rounded-2xl shadow-2xl border border-sky-900/20 overflow-hidden flex flex-col max-h-[85vh]">
+      <div role="dialog" aria-modal="true" aria-label="Security and privacy vault" className="bg-white dark:bg-[#0c1e2e] w-full max-w-md rounded-2xl shadow-2xl border border-sky-900/20 overflow-hidden flex flex-col max-h-[85vh]">
         {/* Header */}
         <div className="bg-[#0284c7] text-white p-4 flex items-center justify-between border-b border-sky-700/40">
           <div className="flex items-center gap-2.5">
@@ -65,7 +67,7 @@ export const SecurityVaultModal: React.FC<SecurityVaultModalProps> = ({
               <p className="text-[11px] text-sky-100/90">Private Document Storage & Safety</p>
             </div>
           </div>
-          <button onClick={onClose} className="p-1 rounded-lg text-sky-100/80 hover:text-white hover:bg-white/10">
+          <button type="button" onClick={onClose} aria-label="Close security vault" className="p-1 rounded-lg text-sky-100/80 hover:text-white hover:bg-white/10">
             <X className="w-5 h-5" />
           </button>
         </div>

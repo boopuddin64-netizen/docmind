@@ -2,6 +2,7 @@ import React, { useState } from 'react';
 import { Reminder } from '../types';
 import { PendingAlert, requestNotificationPermission } from '../lib/notifications';
 import { Bell, BellRing, BellOff, CheckCircle2, Clock, Volume2, X, AlertTriangle, ShieldAlert } from 'lucide-react';
+import { useEscapeKey } from '../lib/useEscapeKey';
 
 interface NotificationCenterDrawerProps {
   isOpen: boolean;
@@ -26,6 +27,7 @@ export const NotificationCenterDrawer: React.FC<NotificationCenterDrawerProps> =
     'Notification' in window && Notification.permission === 'granted'
   );
 
+  useEscapeKey(isOpen, onClose);
   if (!isOpen) return null;
 
   const handleEnablePush = async () => {
@@ -35,7 +37,7 @@ export const NotificationCenterDrawer: React.FC<NotificationCenterDrawerProps> =
 
   return (
     <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-xs flex justify-end">
-      <div className="bg-white dark:bg-[#0c1e2e] w-full max-w-sm h-full shadow-2xl flex flex-col border-l border-sky-900/20 animate-in slide-in-from-right duration-250">
+      <div role="dialog" aria-modal="true" aria-label="Notification center" className="bg-white dark:bg-[#0c1e2e] w-full max-w-sm h-full shadow-2xl flex flex-col border-l border-sky-900/20 animate-in slide-in-from-right duration-250">
         {/* Drawer Header */}
         <div className="bg-[#0284c7] text-white p-4 flex items-center justify-between border-b border-sky-700/40">
           <div className="flex items-center gap-2.5">
@@ -48,7 +50,9 @@ export const NotificationCenterDrawer: React.FC<NotificationCenterDrawerProps> =
             </div>
           </div>
           <button
+            type="button"
             onClick={onClose}
+            aria-label="Close notification center"
             className="p-1 rounded-lg text-sky-100/80 hover:text-white hover:bg-white/10"
           >
             <X className="w-5 h-5" />

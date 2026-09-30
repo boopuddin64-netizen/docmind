@@ -163,7 +163,8 @@ export default function App() {
   } | null>(null);
 
   const [selectedDetailReminder, setSelectedDetailReminder] = useState<Reminder | null>(null);
-  const [toastMessage, setToastMessage] = useState<string | null>(null);
+  const [toast, setToast] = useState<{ message: string; actionLabel?: string; onAction?: () => void } | null>(null);
+  const toastTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   // Compute live alerts
   const activeAlerts = checkUpcomingAlerts(reminders);
@@ -301,12 +302,20 @@ export default function App() {
     localStorage.setItem('docreminder_profile', JSON.stringify({ ...userProfile, securitySettings }));
   }, [userProfile, securitySettings]);
 
-  const showToast = (msg: string) => {
-    setToastMessage(msg);
-    setTimeout(() => {
-      setToastMessage(null);
-    }, 3500);
+  const showToast = (msg: string, opts: { actionLabel?: string; onAction?: () => void; durationMs?: number } = {}) => {
+    if (toastTimerRef.current) clearTimeout(toastTimerRef.current);
+    setToast({ message: msg, actionLabel: opts.actionLabel, onAction: opts.onAction });
+    toastTimerRef.current = setTimeout(() => {
+      setToast(null);
+      toastTimerRef.current = null;
+    }, opts.durationMs ?? 3500);
   };
+  const dismissToast = () => {
+    if (toastTimerRef.current) clearTimeout(toastTimerRef.current);
+    toastTimerRef.current = null;
+    setToast(null);
+  };
+  useEffect(() => () => { if (toastTimerRef.current) clearTimeout(toastTimerRef.current); }, []);
 
   const handleNavigateToReminders = (searchQuery?: string) => {
     if (typeof searchQuery === 'string') {
@@ -450,9 +459,26 @@ export default function App() {
     handleToggleComplete(id);
   };
 
+  const UNDO_WINDOW_MS = 6000;
   const handleDeleteReminder = (id: string) => {
+    const list = remindersRef.current;
+    const index = list.findIndex((r) => r.id === id);
+    if (index < 0) return;
+    const removed = list[index];
     setReminders((prev) => prev.filter((r) => r.id !== id));
-    showToast('Reminder deleted');
+    showToast(`Deleted "${removed.eventTitle}"`, {
+      actionLabel: 'Undo',
+      durationMs: UNDO_WINDOW_MS,
+      onAction: () => {
+        setReminders((prev) => {
+          if (prev.some((r) => r.id === removed.id)) return prev;
+          const next = [...prev];
+          next.splice(Math.min(index, next.length), 0, removed);
+          return next;
+        });
+        showToast(`Restored "${removed.eventTitle}"`);
+      },
+    });
   };
 
   const handleUpdateReminder = (updated: Reminder) => {
@@ -524,10 +550,28 @@ export default function App() {
       )}
 
       {/* Toast Notification */}
-      {toastMessage && (
-        <div className="fixed top-16 left-1/2 -translate-x-1/2 z-50 bg-[#0284c7] text-white px-5 py-2.5 rounded-full shadow-xl text-xs font-bold flex items-center gap-2 animate-in slide-in-from-top-4 duration-200 border border-[#bae6fd]">
-          <BellRing className="w-4 h-4 text-[#bae6fd]" />
-          <span>{toastMessage}</span>
+      {toast && (
+        <div
+          role="status"
+          aria-live="polite"
+          className="fixed top-16 left-1/2 -translate-x-1/2 z-[60] max-w-[92vw] bg-[#0284c7] text-white pl-5 pr-3 py-2.5 rounded-full shadow-xl text-xs font-bold flex items-center gap-2 animate-in slide-in-from-top-4 duration-200 border border-[#bae6fd]"
+        >
+          <BellRing className="w-4 h-4 text-[#bae6fd] shrink-0" />
+          <span className="truncate">{toast.message}</span>
+          {toast.actionLabel && toast.onAction && (
+            <button
+              type="button"
+              onClick={() => {
+                const act = toast.onAction;
+                dismissToast();
+                act?.();
+              }}
+              className="ml-1 px-3 py-1 rounded-full bg-white text-[#0369a1] font-extrabold hover:bg-sky-50 focus:outline-none focus:ring-2 focus:ring-white"
+              id="btn-toast-action"
+            >
+              {toast.actionLabel}
+            </button>
+          )}
         </div>
       )}
 
@@ -554,6 +598,7 @@ export default function App() {
             onSelectReminder={(rem) => setSelectedDetailReminder(rem)}
             onToggleComplete={handleToggleComplete}
             onDeleteReminder={handleDeleteReminder}
+            onShowToast={showToast}
             onAddNewManual={() => setIsAddManualOpen(true)}
             onBackToHome={() => setCurrentTab('home')}
           />
@@ -596,6 +641,7 @@ export default function App() {
             onToggleNotifications={toggleNotifications}
             onRestoreBackup={handleRestoreBackup}
             onTestDeviceAlert={handleTestDeviceAlert}
+            onShowToast={showToast}
           />
         )}
 
@@ -614,6 +660,7 @@ export default function App() {
         isOpen={isUploadModalOpen}
         onClose={() => setIsUploadModalOpen(false)}
         onExtracted={(data) => handleExtractedDoc(data)}
+        onAddManually={() => setIsAddManualOpen(true)}
         userProfile={userProfile}
       />
 

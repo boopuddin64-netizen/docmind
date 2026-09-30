@@ -53,6 +53,22 @@ export function parseIcsDate(input: string | undefined, fallback: Date): { y: nu
   return def;
 }
 
+/** true when the input is empty (today is used) or a real date; false for garbage or impossible dates (e.g. 31/02/2026). */
+export function isValidIcsDateInput(input: string | undefined): boolean {
+  const raw = (input || '').trim();
+  if (!raw) return true;
+  const dmy = raw.match(/^(\d{1,2})[\/\.-](\d{1,2})[\/\.-](\d{4})$/);
+  if (dmy) return isRealDate(+dmy[3], +dmy[2], +dmy[1]);
+  const ymd = raw.match(/^(\d{4})[\/\.-](\d{1,2})[\/\.-](\d{1,2})$/);
+  if (ymd) return isRealDate(+ymd[1], +ymd[2], +ymd[3]);
+  return !isNaN(new Date(raw).getTime());
+}
+
+/** Stricter than isValidIcsDateInput: an EMPTY date is not acceptable (the UI must not silently export "today"). */
+export function isStrictIcsDate(input: string | undefined): boolean {
+  return !!(input || '').trim() && isValidIcsDateInput(input);
+}
+
 export function parseIcsTime(input: string | undefined): { h: number; min: number } {
   return parseTimeParts(input); // shared parser: word-boundary am/pm, first time of a range, 12 AM/PM handled
 }

@@ -13,6 +13,7 @@ import {
   Sparkles,
 } from 'lucide-react';
 import { PendingAlert, requestNotificationPermission, dispatchNativeNotification } from '../lib/notifications';
+import { useEscapeKey } from '../lib/useEscapeKey';
 
 interface DeviceAlertPopupModalProps {
   isOpen: boolean;
@@ -62,6 +63,7 @@ export const DeviceAlertPopupModal: React.FC<DeviceAlertPopupModalProps> = ({
     }
   }, [isOpen, soundMuted, notificationsEnabled]);
 
+  useEscapeKey(isOpen, onClose);
   if (!isOpen || alerts.length === 0) return null;
 
   const urgentAlerts = alerts.filter((a) => a.severity === 'urgent');
@@ -80,7 +82,7 @@ export const DeviceAlertPopupModal: React.FC<DeviceAlertPopupModalProps> = ({
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/65 backdrop-blur-xs animate-in fade-in duration-200">
-      <div className="bg-white dark:bg-[#0c1e2e] border-2 border-amber-500/80 dark:border-amber-500/60 rounded-3xl w-full max-w-md overflow-hidden shadow-2xl flex flex-col max-h-[90vh]">
+      <div role="dialog" aria-modal="true" aria-label="Appointment and deadline alerts" className="bg-white dark:bg-[#0c1e2e] border-2 border-amber-500/80 dark:border-amber-500/60 rounded-3xl w-full max-w-md overflow-hidden shadow-2xl flex flex-col max-h-[90vh]">
         {/* Urgent Header Banner */}
         <div className="p-4 bg-gradient-to-r from-amber-600 via-amber-500 to-amber-600 text-white flex items-center justify-between shadow-xs">
           <div className="flex items-center gap-3">
@@ -116,6 +118,7 @@ export const DeviceAlertPopupModal: React.FC<DeviceAlertPopupModalProps> = ({
               onClick={onClose}
               className="p-1.5 rounded-full hover:bg-white/20 text-white transition-colors"
               title="Dismiss Popup"
+              aria-label="Dismiss alert popup"
             >
               <X className="w-5 h-5" />
             </button>

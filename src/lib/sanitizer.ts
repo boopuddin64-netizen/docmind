@@ -1,5 +1,6 @@
 import { ExtractedDocData, FieldConfidence, ReminderCategory, UserProfile } from '../types';
 import { isSelfName } from './profileMatch';
+import { parseFlexibleDate } from './dateInput';
 
 const VALID_CATEGORIES: ReminderCategory[] = [
   'Medical',
@@ -16,82 +17,19 @@ const VALID_CATEGORIES: ReminderCategory[] = [
   'Specialist',
 ];
 
-function isRealCalendarDate(y: number, m: number, d: number): boolean {
-  const dt = new Date(Date.UTC(y, m - 1, d));
-  return dt.getUTCFullYear() === y && dt.getUTCMonth() === m - 1 && dt.getUTCDate() === d;
-}
-
 /**
  * Normalizes date input into standard DD/MM/YYYY format
  */
 export function normalizeDate(inputDate: string): { formatted: string; isValid: boolean; isoDate: string } {
-  if (!inputDate || typeof inputDate !== 'string') {
-    const today = new Date();
-    const formatted = `${String(today.getDate()).padStart(2, '0')}/${String(today.getMonth() + 1).padStart(2, '0')}/${today.getFullYear()}`;
-    return { formatted, isValid: false, isoDate: today.toISOString().split('T')[0] };
-  }
+  // No usable date => EMPTY (never "today" / "in 15 days"): the review step makes the user enter it.
+  const invalid = { formatted: '', isValid: false, isoDate: '' };
+  if (!inputDate || typeof inputDate !== 'string') return invalid;
 
-  const clean = inputDate.trim();
-
-  // Pattern DD/MM/YYYY or DD-MM-YYYY
-  const ddmmyyyyMatch = clean.match(/^(\d{1,2})[\/\.-](\d{1,2})[\/\.-](\d{4})$/);
-  if (ddmmyyyyMatch) {
-    const day = parseInt(ddmmyyyyMatch[1], 10);
-    const month = parseInt(ddmmyyyyMatch[2], 10);
-    const year = parseInt(ddmmyyyyMatch[3], 10);
-    if (isRealCalendarDate(year, month, day) && year >= 2000 && year <= 2100) {
-      const dStr = String(day).padStart(2, '0');
-      const mStr = String(month).padStart(2, '0');
-      return {
-        formatted: `${dStr}/${mStr}/${year}`,
-        isValid: true,
-        isoDate: `${year}-${mStr}-${dStr}`,
-      };
-    }
-  }
-
-  // Pattern YYYY-MM-DD or YYYY/MM/DD
-  const yyyymmddMatch = clean.match(/^(\d{4})[\/\.-](\d{1,2})[\/\.-](\d{1,2})$/);
-  if (yyyymmddMatch) {
-    const year = parseInt(yyyymmddMatch[1], 10);
-    const month = parseInt(yyyymmddMatch[2], 10);
-    const day = parseInt(yyyymmddMatch[3], 10);
-    if (isRealCalendarDate(year, month, day) && year >= 2000 && year <= 2100) {
-      const dStr = String(day).padStart(2, '0');
-      const mStr = String(month).padStart(2, '0');
-      return {
-        formatted: `${dStr}/${mStr}/${year}`,
-        isValid: true,
-        isoDate: `${year}-${mStr}-${dStr}`,
-      };
-    }
-  }
-
-  // Try parsing natural date string via Date.parse
-  const parsed = new Date(clean);
-  if (!isNaN(parsed.getTime())) {
-    const day = String(parsed.getDate()).padStart(2, '0');
-    const month = String(parsed.getMonth() + 1).padStart(2, '0');
-    const year = parsed.getFullYear();
-    return {
-      formatted: `${day}/${month}/${year}`,
-      isValid: true,
-      isoDate: `${year}-${month}-${day}`,
-    };
-  }
-
-  // Default fallback to 15 days in future if unparseable
-  const fallback = new Date();
-  fallback.setDate(fallback.getDate() + 15);
-  const dStr = String(fallback.getDate()).padStart(2, '0');
-  const mStr = String(fallback.getMonth() + 1).padStart(2, '0');
-  const yStr = fallback.getFullYear();
-
-  return {
-    formatted: `${dStr}/${mStr}/${yStr}`,
-    isValid: false,
-    isoDate: `${yStr}-${mStr}-${dStr}`,
-  };
+  const parts = parseFlexibleDate(inputDate);
+  if (!parts || parts.y < 2000 || parts.y > 2100) return invalid;
+  const dStr = String(parts.d).padStart(2, '0');
+  const mStr = String(parts.m).padStart(2, '0');
+  return { formatted: `${dStr}/${mStr}/${parts.y}`, isValid: true, isoDate: `${parts.y}-${mStr}-${dStr}` };
 }
 
 /**

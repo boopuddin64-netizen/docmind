@@ -1,6 +1,7 @@
 import React from 'react';
 import { ExtractedDocData, Reminder } from '../types';
 import { Copy, ArrowRight, Merge, PlusCircle, Trash2, CheckCircle2, Building2, Calendar, FileText } from 'lucide-react';
+import { useEscapeKey } from '../lib/useEscapeKey';
 
 interface DuplicateMergeModalProps {
   isOpen: boolean;
@@ -23,11 +24,12 @@ export const DuplicateMergeModal: React.FC<DuplicateMergeModalProps> = ({
   onSaveAsNew,
   onDiscard,
 }) => {
+  useEscapeKey(isOpen, onDiscard);
   if (!isOpen) return null;
 
   return (
     <div className="fixed inset-0 z-50 bg-black/70 backdrop-blur-xs flex items-center justify-center p-4 overflow-y-auto">
-      <div className="bg-white dark:bg-[#0c1e2e] w-full max-w-lg rounded-2xl shadow-2xl border border-amber-500/30 overflow-hidden">
+      <div role="dialog" aria-modal="true" aria-label="Possible duplicate document" className="bg-white dark:bg-[#0c1e2e] w-full max-w-lg rounded-2xl shadow-2xl border border-amber-500/30 overflow-hidden">
         {/* Header */}
         <div className="bg-amber-600 text-white px-5 py-4 flex items-center justify-between">
           <div className="flex items-center gap-2.5">

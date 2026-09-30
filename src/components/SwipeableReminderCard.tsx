@@ -131,7 +131,7 @@ export const SwipeableReminderCard: React.FC<SwipeableReminderCardProps> = ({
                 onClick={() => {
                   if (!isSwiping) onSelectReminder(rem);
                 }}
-                className={`text-base font-bold text-[#191c1d] dark:text-white hover:text-[#0284c7] cursor-pointer ${
+                className={`text-base font-bold text-[#191c1d] dark:text-white hover:text-[#0284c7] cursor-pointer break-words line-clamp-2 ${
                   rem.isCompleted ? 'line-through text-[#707975] dark:text-sky-300/60' : ''
                 }`}
               >
@@ -147,6 +147,7 @@ export const SwipeableReminderCard: React.FC<SwipeableReminderCardProps> = ({
                   : 'bg-[#f2f4f5] dark:bg-sky-950 text-[#707975] dark:text-sky-300 hover:bg-[#e1e3e4]'
               }`}
               title={rem.isCompleted ? 'Mark as Active' : 'Mark as Complete'}
+              aria-label={rem.isCompleted ? 'Mark as active' : 'Mark as complete'}
               id={`btn-complete-${rem.id}`}
             >
               <CheckCircle2 className="w-5 h-5" />
@@ -154,11 +155,11 @@ export const SwipeableReminderCard: React.FC<SwipeableReminderCardProps> = ({
           </div>
 
           {/* Provider / Institution Details */}
-          <p className="text-xs font-semibold text-[#3f4945] dark:text-sky-300/80 mb-1">
+          <p className="text-xs font-semibold text-[#3f4945] dark:text-sky-300/80 mb-1 line-clamp-1 break-words">
             {rem.hospitalName}
           </p>
 
-          <p className="text-xs text-[#3f4945] dark:text-sky-200/90 line-clamp-2 mb-3 bg-[#f8fafb] dark:bg-[#07131e] p-2.5 rounded-xl border border-[#f2f4f5] dark:border-sky-900/30">
+          <p className="text-xs text-[#3f4945] dark:text-sky-200/90 line-clamp-2 break-words mb-3 bg-[#f8fafb] dark:bg-[#07131e] p-2.5 rounded-xl border border-[#f2f4f5] dark:border-sky-900/30">
             {rem.shortNote}
           </p>
 
@@ -176,6 +177,7 @@ export const SwipeableReminderCard: React.FC<SwipeableReminderCardProps> = ({
                 onClick={() => exportCalendar(rem)}
                 className="p-1.5 text-[#3f4945] dark:text-sky-300 hover:text-[#0284c7] hover:bg-[#f2f4f5] dark:hover:bg-sky-900/40 rounded-lg"
                 title="Download iCal Event"
+                aria-label={`Add ${rem.eventTitle} to calendar`}
                 id={`btn-export-ical-${rem.id}`}
               >
                 <Download className="w-4 h-4" />
@@ -193,6 +195,7 @@ export const SwipeableReminderCard: React.FC<SwipeableReminderCardProps> = ({
                 onClick={() => onDeleteReminder(rem.id)}
                 className="p-1.5 text-[#707975] dark:text-sky-300/70 hover:text-[#ba1a1a] hover:bg-[#ffdad6]/40 rounded-lg"
                 title="Delete reminder"
+                aria-label={`Delete reminder ${rem.eventTitle}`}
                 id={`btn-delete-${rem.id}`}
               >
                 <Trash2 className="w-4 h-4" />

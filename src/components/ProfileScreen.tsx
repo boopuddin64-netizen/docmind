@@ -31,6 +31,9 @@ import {
 } from 'lucide-react';
 import { UserProfile, FamilyMember, Reminder } from '../types';
 import { ResetAndBackupModal } from './ResetAndBackupModal';
+import { validateAvatarFile, validateEmail } from '../lib/formValidation';
+import { disablePush } from '../lib/pushClient';
+import { resetAppData } from '../lib/resetData';
 
 interface ProfileScreenProps {
   userProfile: UserProfile;
@@ -42,6 +45,8 @@ interface ProfileScreenProps {
   onToggleNotifications?: () => void;
   onRestoreBackup?: (restoredReminders: Reminder[], restoredProfile?: UserProfile) => void;
   onTestDeviceAlert?: () => void;
+  /** In-app toast (replaces window.alert). */
+  onShowToast?: (message: string) => void;
 }
 
 const PRESET_AVATARS = [
@@ -63,6 +68,7 @@ export const ProfileScreen: React.FC<ProfileScreenProps> = ({
   onToggleNotifications,
   onRestoreBackup,
   onTestDeviceAlert,
+  onShowToast,
 }) => {
   const [isEditingProfile, setIsEditingProfile] = useState(false);
   const [isPreferencesOpen, setIsPreferencesOpen] = useState(true);
@@ -74,6 +80,9 @@ export const ProfileScreen: React.FC<ProfileScreenProps> = ({
   const [insuranceProvider, setInsuranceProvider] = useState(userProfile.insuranceProvider);
   const [policyNumber, setPolicyNumber] = useState(userProfile.policyNumber);
 
+  const [emailError, setEmailError] = useState<string | null>(null);
+  const [avatarError, setAvatarError] = useState<string | null>(null);
+  const [isResetting, setIsResetting] = useState(false);
   const [showAvatarPicker, setShowAvatarPicker] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
@@ -92,6 +101,14 @@ export const ProfileScreen: React.FC<ProfileScreenProps> = ({
   }, [userProfile]);
 
   const handleSaveProfileEdits = () => {
+    const emailCheck = validateEmail(profileEmail);
+    if (!emailCheck.ok) {
+      setEmailError(emailCheck.error);
+      return;
+    }
+    setEmailError(null);
+    if (!profileName.trim()) return;
+
     // Automatically update 'Self' household member to match updated profile name & avatar!
     const updatedFamilyMembers = userProfile.familyMembers.map((fam) => {
       if (fam.relation === 'Self') {
@@ -106,8 +123,8 @@ export const ProfileScreen: React.FC<ProfileScreenProps> = ({
 
     onUpdateProfile({
       ...userProfile,
-      name: profileName,
-      email: profileEmail,
+      name: profileName.trim(),
+      email: emailCheck.value,
       avatar: profileAvatar,
       primaryHospital,
       insuranceProvider,
@@ -120,16 +137,25 @@ export const ProfileScreen: React.FC<ProfileScreenProps> = ({
 
   const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
-    if (file) {
-      const reader = new FileReader();
-      reader.onloadend = () => {
-        if (typeof reader.result === 'string') {
-          setProfileAvatar(reader.result);
-          setShowAvatarPicker(false);
-        }
-      };
-      reader.readAsDataURL(file);
+    e.target.value = ''; // allow re-selecting the same file after an error
+    if (!file) return;
+    const check = validateAvatarFile(file);
+    if (!check.ok) {
+      setAvatarError(check.error);
+      return;
     }
+    setAvatarError(null);
+    const reader = new FileReader();
+    reader.onerror = () => setAvatarError('That file could not be read. Please choose another image.');
+    reader.onloadend = () => {
+      if (typeof reader.result === 'string' && reader.result.startsWith('data:image/')) {
+        setProfileAvatar(reader.result);
+        setShowAvatarPicker(false);
+      } else if (!reader.error) {
+        setAvatarError('Please choose an image file (JPG, PNG or WebP).');
+      }
+    };
+    reader.readAsDataURL(file);
   };
 
   const handleAddFamilyMember = () => {
@@ -277,6 +303,11 @@ export const ProfileScreen: React.FC<ProfileScreenProps> = ({
                 <span>Upload From Device</span>
               </button>
             </div>
+            {avatarError && (
+              <p role="alert" className="text-[11px] font-semibold text-rose-600 dark:text-rose-400" id="err-avatar">
+                {avatarError}
+              </p>
+            )}
           </div>
         )}
 
@@ -299,13 +330,25 @@ export const ProfileScreen: React.FC<ProfileScreenProps> = ({
               </div>
 
               <div>
-                <label className="text-[10px] font-bold text-[#3f4945] uppercase">Email</label>
+                <label htmlFor="input-profile-email" className="text-[10px] font-bold text-[#3f4945] uppercase">Email</label>
                 <input
                   type="email"
                   value={profileEmail}
-                  onChange={(e) => setProfileEmail(e.target.value)}
+                  onChange={(e) => {
+                    setProfileEmail(e.target.value);
+                    if (emailError) setEmailError(null);
+                  }}
+                  maxLength={254}
+                  aria-invalid={!!emailError}
+                  aria-describedby={emailError ? 'err-profile-email' : undefined}
+                  id="input-profile-email"
                   className="w-full bg-[#f2f4f5] border border-[#e1e3e4] rounded-xl px-3 py-1.5 text-xs font-semibold text-[#191c1d]"
                 />
+                {emailError && (
+                  <p id="err-profile-email" role="alert" className="text-[11px] font-semibold text-rose-600 mt-1">
+                    {emailError}
+                  </p>
+                )}
               </div>
             </div>
 
@@ -681,9 +724,15 @@ export const ProfileScreen: React.FC<ProfileScreenProps> = ({
         onClose={() => setIsResetModalOpen(false)}
         reminders={reminders}
         userProfile={userProfile}
-        onConfirmReset={() => {
-          localStorage.removeItem('docreminder_items');
-          localStorage.removeItem('docreminder_profile');
+        onConfirmReset={async () => {
+          if (isResetting) return;
+          setIsResetting(true);
+          // 1) stop pushes (server subscription + browser subscription), 2) wipe every local key, 3) reload.
+          await resetAppData(disablePush, localStorage, {
+            clearFiredCache: async () => {
+              if (typeof caches !== 'undefined') await caches.delete('docmind-fired');
+            },
+          });
           window.location.reload();
         }}
         onRestoreBackup={onRestoreBackup}
@@ -721,10 +770,23 @@ export const ProfileScreen: React.FC<ProfileScreenProps> = ({
         <div className="pt-1 flex items-center justify-between">
           <button
             onClick={() => {
-              if (navigator.clipboard) {
-                navigator.clipboard.writeText(window.location.href);
-                alert("App link copied to clipboard! Open in Safari or Chrome to install as Native App.");
-              }
+              const url = window.location.href;
+              const copied = async () => {
+                try {
+                  if (!navigator.clipboard?.writeText) return false;
+                  await navigator.clipboard.writeText(url);
+                  return true;
+                } catch {
+                  return false;
+                }
+              };
+              void copied().then((ok) =>
+                onShowToast?.(
+                  ok
+                    ? 'App link copied. Open it in Safari or Chrome to install the app.'
+                    : `Could not copy automatically. Copy this link manually: ${url}`,
+                ),
+              );
             }}
             className="bg-white text-[#0284c7] text-xs font-bold px-3.5 py-2 rounded-xl flex items-center gap-1.5 hover:bg-sky-50 transition-colors shadow-sm"
           >

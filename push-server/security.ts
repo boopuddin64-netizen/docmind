@@ -159,7 +159,8 @@ export function pushGuards(opts: PushGuardOptions = {}): Array<RequestHandler | 
     ((req, res, next) => (req.path === '/sync-reminders' ? sync(req, res, next) : small(req, res, next))) as RequestHandler,
     (err: any, _req: Request, res: Response, next: NextFunction) => {
       if (err?.type === 'entity.too.large') return void res.status(413).json({ success: false, error: 'Request body too large.' });
-      if (err?.type === 'entity.parse.failed' || err?.type === 'charset.unsupported' || err?.type === 'encoding.unsupported') {
+      if (err?.type === 'entity.parse.failed') return void res.status(400).json({ success: false, error: 'Invalid JSON' });
+      if (err?.type === 'charset.unsupported' || err?.type === 'encoding.unsupported') {
         return void res.status(400).json({ success: false, error: 'Invalid request body.' });
       }
       next(err);
