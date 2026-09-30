@@ -38,3 +38,10 @@ Vercel Hobby cron runs at most once per day (`vercel.json` keeps a daily 07:00 U
 
 ## Local development
 `npm run dev` runs the same API plus an in-process 30 s dispatcher; storage is `.data/push-store.json` (override with `PUSH_STORE_PATH`) unless Upstash vars are set.
+
+## Hardening notes
+- **Endpoints**: `/api/push/subscribe` only accepts `https` endpoints on known push services (FCM, Mozilla, Windows WNS, Apple; extend with `PUSH_ALLOWED_HOSTS`). IP literals, localhost, credentials and non-443 ports are rejected. `p256dh` must decode to 65 bytes and `auth` to 16.
+- **Rate limits / size**: `/api/push/*` is limited per IP (in-memory: on serverless each warm instance keeps its own counters and cold starts reset them, so this is best-effort; the subscription cap `PUSH_MAX_SUBSCRIPTIONS` is the hard bound). Bodies are limited to 8 KB (256 KB for sync-reminders).
+- **Dispatch**: each send has an 8 s timeout, sends run in a worker pool, and no new send starts after ~35 s. The per-event claim is a 3 min *lease*; only a successful send turns it into the 30-day sent-marker, so a hung/failed send is retried and overlapping cron runs still never double-send. A send that *times out* leaves its lease to expire (the outcome is unknown), so it is retried after the lease.
+- **Dead subscriptions**: 404/410 → pruned immediately. 400/401/403 → pruned after 3 consecutive failures; other failures (timeouts, 5xx) → pruned after 10 consecutive failures spanning at least 24 h. Failing subscriptions back off 1 min → 30 min.
+- **Sync**: invalid reminders are skipped by the server (`skipped` count in the response) instead of failing the whole sync.

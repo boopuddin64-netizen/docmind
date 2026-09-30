@@ -3,6 +3,8 @@
  * and the Express endpoint (server.ts) so the two can no longer drift apart.
  */
 
+import { parseTimeParts } from './schedule.js';
+
 export interface IcsInput {
   title?: string;
   note?: string;
@@ -52,21 +54,7 @@ export function parseIcsDate(input: string | undefined, fallback: Date): { y: nu
 }
 
 export function parseIcsTime(input: string | undefined): { h: number; min: number } {
-  let h = 8;
-  let min = 0;
-  const raw = (input || '').trim();
-  const match = raw.match(/(\d{1,2}):(\d{2})/);
-  if (match) {
-    const hh = parseInt(match[1], 10);
-    const mm = parseInt(match[2], 10);
-    if (hh <= 23 && mm <= 59) {
-      h = hh;
-      min = mm;
-      if (/pm/i.test(raw) && h < 12) h += 12;
-      if (/am/i.test(raw) && h === 12) h = 0;
-    }
-  }
-  return { h, min };
+  return parseTimeParts(input); // shared parser: word-boundary am/pm, first time of a range, 12 AM/PM handled
 }
 
 export function buildIcsContent(input: IcsInput): string {

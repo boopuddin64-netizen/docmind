@@ -96,3 +96,60 @@ test('createStore picks Upstash when env is set (incl. Vercel KV_* aliases), els
   assert.ok(createStore({ KV_REST_API_URL: 'https://x.upstash.io', KV_REST_API_TOKEN: 't' }) instanceof UpstashStore);
   assert.ok(createStore({ PUSH_STORE_PATH: path.join(os.tmpdir(), 'unused.json') }) instanceof MemoryStore);
 });
+
+test('MemoryStore.load is cached: concurrent first calls on a cold start never see an empty store (no duplicate claim)', async () => {
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'dm-store-'));
+  const file = path.join(dir, 'store.json');
+  const seed = new MemoryStore(file);
+  assert.equal(await seed.claim('a|k', 3600), true);
+  await seed.markSent('a|k', 3600);
+  // Cold start: many concurrent claims hit a fresh instance BEFORE the file has been read.
+  const cold = new MemoryStore(file);
+  const results = await Promise.all(Array.from({ length: 10 }, () => cold.claim('a|k', 3600)));
+  assert.deepEqual(results, Array(10).fill(false), 'the persisted marker must be visible to every concurrent first call');
+  // and reads only happen once
+  const orig = fs.readFile; let reads = 0;
+  (fs as any).readFile = (...a: any[]) => { reads++; return (orig as any)(...a); };
+  try {
+    const cold2 = new MemoryStore(file);
+    await Promise.all([cold2.claim('x', 60), cold2.getSubscription('y'), cold2.countSubscriptions(), cold2.claim('x', 60)]);
+    assert.equal(reads, 1, 'load promise is cached');
+  } finally { (fs as any).readFile = orig; }
+  await fs.rm(dir, { recursive: true, force: true });
+});
+
+test('store: markSent turns a short lease into a permanent marker; release drops a lease; health round-trips', async () => {
+  let t = 1_000_000;
+  const s = new MemoryStore(undefined, () => t);
+  assert.equal(await s.claim('k', 180), true);
+  t += 181_000; // lease expired => reclaimable (alert not lost)
+  assert.equal(await s.claim('k', 180), true);
+  await s.markSent('k', 30 * 24 * 3600);
+  t += 181_000;
+  assert.equal(await s.claim('k', 180), false, 'permanent after markSent');
+  assert.equal(await s.claim('r', 180), true);
+  await s.release('r');
+  assert.equal(await s.claim('r', 180), true);
+  const h = { failures: 2, rejects: 1, firstFailureAt: 1, lastFailureAt: 2, nextAttemptAt: 3, lastStatus: 401 };
+  await s.setHealth('id', h);
+  assert.deepEqual(await s.getHealth('id'), h);
+  await s.setHealth('id', null);
+  assert.equal(await s.getHealth('id'), null);
+});
+
+test('UpstashStore: claim is SET NX EX (lease); markSent overwrites with the long TTL; health stored with TTL', async () => {
+  const calls: any[] = [];
+  const fake = new FakeRedis();
+  const origSet = fake.set.bind(fake);
+  fake.set = async (k: string, v: any, o?: any) => { calls.push([k, o]); return origSet(k, v, o); };
+  const s = new UpstashStore(fake as any);
+  assert.equal(await s.claim('a|k', 180), true);
+  assert.equal(await s.claim('a|k', 180), false);
+  await s.markSent('a|k', 2592000);
+  assert.deepEqual(calls[0][1], { nx: true, ex: 180 });
+  assert.deepEqual(calls[2][1], { ex: 2592000 });
+  await s.setHealth('a', { failures: 1, rejects: 0, firstFailureAt: 1, lastFailureAt: 1, nextAttemptAt: 2 });
+  assert.equal((await s.getHealth('a'))!.failures, 1);
+  await s.removeSubscription('a');
+  assert.equal(await s.getHealth('a'), null, 'health removed with the subscription');
+});

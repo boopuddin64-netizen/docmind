@@ -9,6 +9,7 @@ import { GoogleGenAI, Type } from "@google/genai";
 import { buildIcsContent, icsFilename } from "../src/lib/icsBuilder.js";
 import { escapeRegExp } from "../src/lib/profileMatch.js";
 import { registerPushRoutes } from "../push-server/routes.js";
+import { pushGuards } from "../push-server/security.js";
 import type { PushDeps } from "../push-server/core.js";
 
 // Initialize Gemini Client server-side
@@ -29,6 +30,8 @@ export function createApiApp(pushDeps?: PushDeps) {
   const router = express();
   router.disable("x-powered-by");
 
+  // /api/push/* gets its own guards (rate limit, small body limits) BEFORE the generic 25 MB parser (only document scans need that).
+  router.use("/api/push", ...pushGuards());
   router.use(express.json({ limit: "25mb" }));
 
   // API: Download iCal (.ics) Calendar File

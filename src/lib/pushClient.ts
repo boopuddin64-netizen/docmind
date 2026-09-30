@@ -118,26 +118,65 @@ export async function disablePush(): Promise<void> {
   }
 }
 
-export async function syncReminders(reminders: Reminder[]): Promise<boolean> {
+const SYNC_RETRY_DELAYS_MS = [1_000, 4_000];
+const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
+
+export interface SyncOutcome {
+  ok: boolean;
+  /** Reminders the server refused (invalid) while accepting the rest. */
+  skipped?: number;
+  status?: number;
+}
+
+/**
+ * Sends the reminders to the server and checks the response. Retries transient failures (network / 5xx / 429) with a
+ * short backoff; 401 drops local state (server forgot us); other 4xx are not retried. Failures are logged, not swallowed.
+ */
+export async function syncRemindersDetailed(
+  reminders: Reminder[],
+  opts: { retryDelaysMs?: number[]; fetchImpl?: typeof fetch; log?: (...a: unknown[]) => void } = {},
+): Promise<SyncOutcome> {
   const stored = readStored();
-  if (!stored) return false;
-  try {
-    const res = await fetch('/api/push/sync-reminders', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${stored.token}` },
-      body: JSON.stringify({
-        subscriptionId: stored.subscriptionId,
-        tzOffsetMinutes: new Date().getTimezoneOffset(),
-        reminders: buildSyncPayload(reminders),
-      }),
-    });
-    if (res.status === 401) {
-      // Server forgot us (e.g. pruned): drop local state so the next enablePush() re-subscribes.
-      localStorage.removeItem(STORAGE_KEY);
-      return false;
+  if (!stored) return { ok: false };
+  const doFetch = opts.fetchImpl ?? fetch;
+  const log = opts.log ?? ((...a: unknown[]) => console.warn(...a));
+  const delays = opts.retryDelaysMs ?? SYNC_RETRY_DELAYS_MS;
+  const body = JSON.stringify({
+    subscriptionId: stored.subscriptionId,
+    tzOffsetMinutes: new Date().getTimezoneOffset(),
+    reminders: buildSyncPayload(reminders),
+  });
+  for (let attempt = 0; ; attempt++) {
+    let status: number | undefined;
+    try {
+      const res = await doFetch('/api/push/sync-reminders', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${stored.token}` },
+        body,
+      });
+      status = res.status;
+      if (res.status === 401) {
+        // Server forgot us (e.g. pruned): drop local state so the next enablePush() re-subscribes.
+        localStorage.removeItem(STORAGE_KEY);
+        log('[push] sync rejected (401): subscription is unknown to the server, will re-subscribe');
+        return { ok: false, status };
+      }
+      if (res.ok) {
+        let skipped = 0;
+        try { skipped = Number((await res.json())?.skipped) || 0; } catch { /* body is informational */ }
+        if (skipped > 0) log(`[push] server skipped ${skipped} invalid reminder(s) during sync`);
+        return { ok: true, skipped, status };
+      }
+      log(`[push] sync failed with HTTP ${res.status}`);
+      if (res.status < 500 && res.status !== 429 && res.status !== 408) return { ok: false, status }; // not retryable
+    } catch (e) {
+      log('[push] sync failed (network):', e);
     }
-    return res.ok;
-  } catch {
-    return false;
+    if (attempt >= delays.length) return { ok: false, status };
+    await sleep(delays[attempt]);
   }
+}
+
+export async function syncReminders(reminders: Reminder[]): Promise<boolean> {
+  return (await syncRemindersDetailed(reminders)).ok;
 }
