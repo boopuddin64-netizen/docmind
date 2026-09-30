@@ -68,7 +68,7 @@ export function parseDateParts(input: string | undefined | null): { y: number; m
  * - Ranges use the FIRST time: "9:00 AM - 5:00 PM" is 09:00.
  * - 12 AM = 00:xx, 12 PM = 12:xx.
  */
-export function parseTimeParts(input: string | undefined | null): { h: number; min: number } {
+export function parseTimeOrNull(input: string | undefined | null): { h: number; min: number } | null {
   const raw = (typeof input === 'string' ? input : '').trim();
   const re = /\b(\d{1,2}):(\d{2})(?!\d)(?:\s*([ap])\.?m(?![A-Za-z]))?|\b(\d{1,2})\s*([ap])\.?m(?![A-Za-z])/i;
   const m = re.exec(raw);
@@ -82,7 +82,11 @@ export function parseTimeParts(input: string | undefined | null): { h: number; m
       return { h, min };
     }
   }
-  return { h: 8, min: 0 };
+  return null;
+}
+
+export function parseTimeParts(input: string | undefined | null): { h: number; min: number } {
+  return parseTimeOrNull(input) ?? { h: 8, min: 0 };
 }
 
 /**

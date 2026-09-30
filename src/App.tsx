@@ -704,6 +704,7 @@ export default function App() {
         onUpdateReminder={handleUpdateReminder}
         onSnooze={handleSnoozeAlert}
         userProfile={userProfile}
+        onShowToast={showToast}
       />
 
       {/* Snooze picker opened from the closed-app notification's "Snooze…" action */}

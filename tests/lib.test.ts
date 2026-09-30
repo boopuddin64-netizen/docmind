@@ -42,7 +42,7 @@ test('ics: 12 AM / 12 PM and bad times', () => {
 
 test('ics: impossible date falls back instead of emitting 20261232-style values', () => {
   const ics = buildIcsContent({ title: 'x', date: '31/02/2026', now: NOW });
-  assert.match(ics, /DTSTART:20260929T080000/);
+  assert.match(ics, /DTSTART;VALUE=DATE:20260929\r\n/, 'falls back to today, all-day (no time given)');
 });
 
 test('profile match is not hard-coded to a single user', () => {

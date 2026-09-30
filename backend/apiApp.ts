@@ -80,12 +80,14 @@ export function createApiApp(pushDeps?: PushDeps, opts: ApiAppOptions = {}) {
         location: q('location'),
         recipient: q('recipient'),
         date: q('date'),
-        time: q('time', '08:00 AM'),
+        time: q('time'),
+        alarmMinutes: Number(q('alarm', '60')),
       });
       const filename = icsFilename(title);
 
       res.setHeader('Content-Type', 'text/calendar; charset=utf-8');
       res.setHeader('Content-Disposition', `inline; filename="${filename}"`);
+      res.setHeader('Cache-Control', 'no-store');
       return res.send(icsContent);
     } catch (e: any) {
       console.error("download-ics error:", e);

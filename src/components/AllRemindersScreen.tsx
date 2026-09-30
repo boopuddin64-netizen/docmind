@@ -16,7 +16,7 @@ import {
 } from 'lucide-react';
 import { Reminder, ReminderCategory, UserProfile } from '../types';
 import { SwipeableReminderCard } from './SwipeableReminderCard';
-import { downloadIcsCalendar } from '../lib/icalHelper';
+import { exportIcsCalendar } from '../lib/icalHelper';
 
 interface AllRemindersScreenProps {
   reminders: Reminder[];
@@ -194,10 +194,9 @@ export const AllRemindersScreen: React.FC<AllRemindersScreenProps> = ({
     return matchedCount === terms.length || (terms.length >= 3 && matchedCount >= Math.ceil(terms.length * 0.75));
   });
 
-  const exportCalendar = (rem: Reminder) => {
-    if (!downloadIcsCalendar(rem)) {
-      onShowToast?.('Can not export: this reminder has no valid date. Edit the date first.');
-    }
+  const exportCalendar = async (rem: Reminder) => {
+    const r = await exportIcsCalendar(rem);
+    onShowToast?.(r.message);
   };
 
   return (
